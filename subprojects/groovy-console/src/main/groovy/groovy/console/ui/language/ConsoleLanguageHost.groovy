@@ -192,12 +192,6 @@ final class ConsoleLanguageHost implements AutoCloseable {
     }
 
     /**
-     * Compiles {@code text} immediately and returns diagnostics.
-     *
-     * @param text buffer text
-     * @return hits in 0-based UTF-16 coordinates
-     */
-    /**
      * Lenient lexer tokens for the token viewer.
      *
      * @param text buffer text
@@ -275,6 +269,12 @@ final class ConsoleLanguageHost implements AutoCloseable {
         client
     }
 
+    /**
+     * Compiles {@code text} immediately and returns diagnostics.
+     *
+     * @param text buffer text
+     * @return hits in 0-based UTF-16 coordinates, or empty when the host is closed
+     */
     @PackageScope
     List<Hit> compileAndDiagnostics(String text) {
         if (closed) {

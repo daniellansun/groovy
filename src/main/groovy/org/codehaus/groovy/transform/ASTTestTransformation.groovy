@@ -20,6 +20,7 @@ package org.codehaus.groovy.transform
 
 import groovy.transform.ASTTest
 import groovy.transform.CompilationUnitAware
+import groovy.transform.Internal
 import org.codehaus.groovy.ast.ASTNode
 import org.codehaus.groovy.ast.AnnotationNode
 import org.codehaus.groovy.ast.ClassCodeVisitorSupport
@@ -72,6 +73,7 @@ class ASTTestTransformation implements ASTTransformation, CompilationUnitAware {
      * @return the override on this thread, or {@code null} when the system property applies
      * @since 7.0.0
      */
+    @Internal
     static Boolean currentThreadEnabled() {
         THREAD_ENABLED.get()
     }
@@ -84,6 +86,7 @@ class ASTTestTransformation implements ASTTransformation, CompilationUnitAware {
      * @param enabled {@code false} to skip {@code @ASTTest} on this thread, {@code true} to leave the property in charge, {@code null} to clear
      * @since 7.0.0
      */
+    @Internal
     static void setThreadEnabled(Boolean enabled) {
         if (enabled == null) {
             THREAD_ENABLED.remove()
