@@ -187,7 +187,9 @@ completion and the background compile then stay off. `Script -> Inspect CST`
 and `Script -> Inspect Tokens` still show the buffer.
 `View -> Smart Highlighter` still selects semantic-token or regex colouring.
 If `groovy-lsp` or Gson is not on the classpath, the editor opens with
-the regex highlighter and prints one warning.
+the regex highlighter and logs one warning. Compiler Assistance is
+disabled for that window, the language host stays unset, and a second
+warning is logged. The saved preference is left unchanged.
 The completion key stroke defaults to `Alt+/`
 (`Ctrl+Space` is left free for the system input method).
 On a layout where `/` is typed with Shift, such as Swedish Shift+7,

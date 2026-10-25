@@ -33,6 +33,7 @@ import groovy.console.ui.text.SmartDocumentFilter
 import groovy.swing.SwingBuilder
 import groovy.transform.CompileStatic
 import groovy.transform.EqualsAndHashCode
+import groovy.transform.Internal
 import groovy.transform.PackageScope
 import groovy.transform.ThreadInterrupt
 import groovy.transform.TupleConstructor
@@ -136,6 +137,7 @@ class Console implements CaretListener, HyperlinkListener, ComponentListener, Fo
     /** Default completion key stroke, understood by {@link KeyStroke#getKeyStroke(String)}. */
     static final String DEFAULT_COMPLETION_SHORTCUT = 'alt SLASH'
     private static final boolean DEBUG_GRAPE = Boolean.getBoolean('groovy.grape.debug')
+    private static final System.Logger LOGGER = System.getLogger(Console.class.name)
 
     /** User preferences backing console settings. */
     static prefs = Preferences.userNodeForPackage(Console)
@@ -619,17 +621,65 @@ class Console implements CaretListener, HyperlinkListener, ComponentListener, Fo
      * Attaches the in-process language host to the editor and publishes
      * the console compiler configuration. Skipped when
      * {@link #compilerAssistance} is off, and any host already attached
-     * is closed.
+     * is closed. A missing language-services jar surfaces as
+     * {@link LinkageError} while the host is constructed. The console
+     * stays open, the host stays unset, and this window's Compiler
+     * Assistance menu item is disabled. The saved preference is left
+     * unchanged.
      */
     @CompileStatic
     private void installLanguageHost() {
+        installLanguageHost {
+            ConsoleLanguageHost.attach(inputArea, shell.classLoader, config)
+        }
+    }
+
+    /**
+     * @param open builds the host for this editor. A thrown
+     *             {@link LinkageError} is the missing-jar path described
+     *             on {@link #installLanguageHost()}
+     */
+    @Internal
+    @CompileStatic
+    @PackageScope
+    void installLanguageHost(Closure<ConsoleLanguageHost> open) {
+        ConsoleLanguageHost previous = languageHost
+        languageHost = null
+        previous?.close()
         if (!compilerAssistance) {
-            languageHost?.close()
-            languageHost = null
             return
         }
-        languageHost?.close()
-        languageHost = ConsoleLanguageHost.attach(inputArea, shell.classLoader, config)
+        try {
+            languageHost = (ConsoleLanguageHost) open.call()
+        } catch (LinkageError error) {
+            languageHost = null
+            reportMissingLanguageServices(error)
+        }
+    }
+
+    /**
+     * Logs the missing-jar warning and disables this window's Compiler Assistance item.
+     * The saved preference is left unchanged so a later launch can try again.
+     */
+    private void reportMissingLanguageServices(LinkageError error) {
+        LOGGER.log(System.Logger.Level.WARNING,
+                'Groovy language services are unavailable ({0}); Compiler Assistance is off.',
+                error.class.simpleName)
+        def builder = swing
+        if (builder == null) {
+            return
+        }
+        def action
+        try {
+            action = builder.compilerAssistanceAction
+        } catch (MissingPropertyException ignored) {
+            return
+        }
+        if (!(action instanceof Action)) {
+            return
+        }
+        action.putValue(Action.SELECTED_KEY, Boolean.FALSE)
+        action.enabled = false
     }
 
     /**
@@ -2344,7 +2394,8 @@ class Console implements CaretListener, HyperlinkListener, ComponentListener, Fo
      * The preference is one value shared by those windows, and each open
      * window's menu check is updated to match. Off skips diagnostics,
      * completion and the background compile. Inspect CST and Inspect Tokens
-     * still read the buffer.
+     * still read the buffer. A missing language-services jar leaves the
+     * host unset and disables that window's menu item.
      */
     void compilerAssistance(EventObject evt = null) {
         if (applyingCompilerAssistance) {

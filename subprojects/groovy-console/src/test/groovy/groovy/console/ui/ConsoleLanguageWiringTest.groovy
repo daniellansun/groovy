@@ -18,6 +18,7 @@
  */
 package groovy.console.ui
 
+import groovy.console.ui.language.ConsoleLanguageHost
 import groovy.console.ui.text.GroovyFilter
 import groovy.console.ui.text.SmartDocumentFilter
 import groovy.inspect.Inspector
@@ -40,6 +41,11 @@ import java.awt.Component
 import java.awt.Container
 import java.awt.HeadlessException
 import java.awt.event.ActionEvent
+import java.text.MessageFormat
+import java.util.logging.Handler
+import java.util.logging.Level
+import java.util.logging.LogRecord
+import java.util.logging.Logger
 import java.util.prefs.Preferences
 
 class ConsoleLanguageWiringTest {
@@ -157,6 +163,99 @@ class ConsoleLanguageWiringTest {
     }
 
     @Test
+    void missingLanguageServicesLeaveTheHostUnset() {
+        // GROOVY-12448
+        Preferences prefs = Preferences.userNodeForPackage(Console)
+        boolean previousAssistance = Console.compilerAssistance
+        boolean previousPref = prefs.getBoolean('compilerAssistance', true)
+        Console console = new Console()
+        def hostField = Console.getDeclaredField('languageHost')
+        hostField.accessible = true
+        def closedField = ConsoleLanguageHost.getDeclaredField('closed')
+        closedField.accessible = true
+        def action = new AbstractAction('Compiler Assistance') {
+            @Override void actionPerformed(ActionEvent event) { }
+        }
+        Logger logger = Logger.getLogger(Console.class.name)
+        List<LogRecord> records = []
+        Handler handler = new Handler() {
+            @Override void publish(LogRecord record) { records << record }
+            @Override void flush() { }
+            @Override void close() { }
+        }
+        handler.level = Level.ALL
+        Level previousLevel = logger.level
+        logger.addHandler(handler)
+        logger.level = Level.ALL
+        try {
+            Console.compilerAssistance = true
+            console.inputArea = new JTextPane()
+            console.inputArea.document = new DefaultStyledDocument()
+
+            console.installLanguageHost { null }
+            assert hostField.get(console) == null
+            assert records.empty
+
+            console.installLanguageHost {
+                throw new NoClassDefFoundError('com.google.gson.Gson')
+            }
+            assert hostField.get(console) == null
+            assert Console.compilerAssistance
+            assert prefs.getBoolean('compilerAssistance', true) == previousPref
+
+            console.swing = new SwingBuilder()
+            console.installLanguageHost {
+                throw new NoClassDefFoundError('com.google.gson.Gson')
+            }
+            console.swing.setVariable('compilerAssistanceAction', 'not-an-action')
+            console.installLanguageHost {
+                throw new NoClassDefFoundError('com.google.gson.Gson')
+            }
+            assert hostField.get(console) == null
+
+            action.enabled = true
+            action.putValue(Action.SELECTED_KEY, Boolean.TRUE)
+            console.swing = new SwingBuilder()
+            console.swing.setVariable('compilerAssistanceAction', action)
+            def previous = ConsoleLanguageHost.attach(console.inputArea, console.shell.classLoader)
+            hostField.set(console, previous)
+            assert !closedField.getBoolean(previous)
+            console.installLanguageHost {
+                throw new NoClassDefFoundError('com.google.gson.Gson')
+            }
+            assert hostField.get(console) == null
+            assert closedField.getBoolean(previous)
+            assert !action.enabled
+            assert Boolean.FALSE.equals(action.getValue(Action.SELECTED_KEY))
+            assert Console.compilerAssistance
+            assert prefs.getBoolean('compilerAssistance', true) == previousPref
+            assert records.size() == 4
+            assert records.every { LogRecord record ->
+                record.level == Level.WARNING && renderedWarning(record).contains(
+                        'Groovy language services are unavailable (NoClassDefFoundError); Compiler Assistance is off.')
+            }
+
+            action.enabled = true
+            Console.compilerAssistance = false
+            boolean called = false
+            console.installLanguageHost {
+                called = true
+                null
+            }
+            assert !called
+            assert action.enabled
+            assert hostField.get(console) == null
+            assert records.size() == 4
+        } finally {
+            logger.removeHandler(handler)
+            logger.level = previousLevel
+            hostField.get(console)?.close()
+            Console.consoleControllers.remove(console)
+            Console.compilerAssistance = previousAssistance
+        }
+    }
+
+    @Test
     void missingLanguageServicesUseTheRegexHighlighter() {
         def doc = new DefaultStyledDocument()
         DocumentFilter filter = ConsoleTextEditor.highlightingFilter(doc) {
@@ -238,6 +337,14 @@ class ConsoleLanguageWiringTest {
         @Override void setLayeredPane(JLayeredPane layeredPane) { root.layeredPane = layeredPane }
         @Override Component getGlassPane() { root.glassPane }
         @Override void setGlassPane(Component glassPane) { root.glassPane = glassPane }
+    }
+
+    private static String renderedWarning(LogRecord record) {
+        Object[] params = record.parameters
+        if (params == null || params.length == 0) {
+            return record.message ?: ''
+        }
+        MessageFormat.format(record.message, params)
     }
 
     private static void withApprovingChooser(Closure body) {

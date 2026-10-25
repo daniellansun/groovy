@@ -570,8 +570,11 @@ trailing dot (`java.io`, not `java.io.`). `getImportClassNames`,
 `getStaticImports` are new in 7.0.0.
 
 A distribution that omits `groovy-lsp` or Gson still opens the console
-and groovysh. The console uses regex highlighting. The shell uses its
-Inspector completer and prints one warning. `noSyntaxCheck` set in
+and groovysh. The console uses regex highlighting, leaves the language
+host unset, and disables Compiler Assistance on that window. A warning
+is logged for the highlighter and another for the host. The saved
+preference is not changed. The shell uses its Inspector completer and
+prints one warning. `noSyntaxCheck` set in
 `groovysh_init.groovy` is applied before the language session starts.
 
 `@ASTTest` stays a no-op when `groovy.asttest.enable` is `false`. A
