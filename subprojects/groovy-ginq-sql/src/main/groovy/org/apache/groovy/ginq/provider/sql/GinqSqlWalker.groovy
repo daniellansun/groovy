@@ -128,7 +128,11 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
         if (queryNode == null || sourceUnit.errorCollector.hasErrors()) {
             return constX(null)
         }
-        return executeExpression(renderSql(queryNode, expression), dataSourceExpr, expression)
+        RenderedSql renderedSql = renderSql(queryNode, expression)
+        if (renderedSql == null) {
+            return constX(null)
+        }
+        return executeExpression(renderedSql, dataSourceExpr, expression)
     }
 
     private Expression visitMixed(AbstractGinqExpression expression, Expression dataSourceExpr) {
@@ -138,7 +142,11 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
             return constX(null)
         }
         if (plan.fullQuery != null) {
-            return executeExpression(renderSql(plan.fullQuery, expression), dataSourceExpr, expression)
+            RenderedSql renderedSql = renderSql(plan.fullQuery, expression)
+            if (renderedSql == null) {
+                return constX(null)
+            }
+            return executeExpression(renderedSql, dataSourceExpr, expression)
         }
         return emitMixed(plan, expression, dataSourceExpr)
     }
@@ -146,8 +154,15 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
     private Expression emitMixed(MixedPlan plan, AbstractGinqExpression expression, Expression dataSourceExpr) {
         GinqExpression tail = plan.tail
         if (plan.columnCountQueries.isEmpty()) {
-            tail.fromExpression.dataSourceExpr = executeExpression(renderSql(plan.prefix, expression), dataSourceExpr, expression)
+            RenderedSql prefixSql = renderSql(plan.prefix, expression)
+            if (prefixSql == null) {
+                return constX(null)
+            }
+            tail.fromExpression.dataSourceExpr = executeExpression(prefixSql, dataSourceExpr, expression)
             materializeQuery(tail)
+            if (sourceUnit.errorCollector.hasErrors()) {
+                return constX(null)
+            }
             return runCollection(tail)
         }
 
@@ -156,10 +171,16 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
         List<Expression> counts = []
         for (SqlQuery countQuery : plan.columnCountQueries) {
             RenderedSql rendered = renderSql(countQuery, expression)
+            if (rendered == null) {
+                return constX(null)
+            }
             counts << callX(classX(SQL_GINQ_RUNTIME_TYPE), 'columnCount',
                     args(dataSourceExpr, constX(rendered.sql), new ListExpression(rendered.parameters)))
         }
         RenderedSql prefixSql = renderSql(plan.prefix, expression)
+        if (prefixSql == null) {
+            return constX(null)
+        }
         Expression zip = callX(classX(SQL_GINQ_RUNTIME_TYPE), 'zipAliases', args(
                 dataSourceExpr,
                 constX(prefixSql.sql),
@@ -170,6 +191,9 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
             tail.joinExpressionList[i].dataSourceExpr = callX(rowsVar, 'get', constX(i + 1))
         }
         materializeQuery(tail)
+        if (sourceUnit.errorCollector.hasErrors()) {
+            return constX(null)
+        }
         Expression tailExec = runCollection(tail)
         Expression wrapper = callX(lambdaX(params(), block(
                 declS(localVarX(rowsName), zip),
@@ -237,7 +261,12 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
      * Renders the translated query to SQL text plus ordered parameters.
      */
     protected RenderedSql renderSql(SqlQueryNode queryNode, AbstractGinqExpression expression) {
-        return new SqlRenderer(dialect).render(queryNode)
+        try {
+            return new SqlRenderer(dialect).render(queryNode)
+        } catch (IllegalArgumentException e) {
+            error(e.message, expression)
+            return null
+        }
     }
 
     private GinqToSqlTranslator translator() {
@@ -333,11 +362,19 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
      * iterate as character sequences. Sources already rewritten to the SQL
      * prefix result are left alone. Nested queries stay GINQ so the collection
      * provider can correlate them, but their tables are loaded with {@code SELECT *}.
+     * Those names use the same plain-identifier check and qualified-name
+     * rendering as a translated {@code from} clause.
      */
     private void materializeQuery(GinqExpression ginqExpression) {
         materializeSource(ginqExpression.fromExpression)
+        if (sourceUnit.errorCollector.hasErrors()) {
+            return
+        }
         for (JoinExpression joinExpression : ginqExpression.joinExpressionList) {
             materializeSource(joinExpression)
+            if (sourceUnit.errorCollector.hasErrors()) {
+                return
+            }
             if (joinExpression.onExpression != null) {
                 joinExpression.onExpression.filterExpr = materialize(joinExpression.onExpression.filterExpr)
             }
@@ -376,7 +413,7 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
     private void materializeSource(DataSourceExpression source) {
         Expression dataSource = source.dataSourceExpr
         if (dataSource instanceof ConstantExpression && dataSource.value instanceof String) {
-            source.dataSourceExpr = selectAll((String) dataSource.value)
+            source.dataSourceExpr = selectAll(source, (String) dataSource.value)
         } else if (dataSource instanceof GinqExpression) {
             materializeQuery((GinqExpression) dataSource)
         } else if (dataSource instanceof SetOperationExpression) {
@@ -429,10 +466,14 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
         }
     }
 
-    private Expression selectAll(String tableName) {
+    private Expression selectAll(DataSourceExpression source, String tableName) {
+        if (!GinqToSqlTranslator.plainTableName(tableName)) {
+            error(GinqToSqlTranslator.invalidTableNameMessage(tableName), source)
+            return constX(null)
+        }
         Expression dataSourceExpr = configurationExpressions.get(GinqGroovyMethods.CONF_DATA_SOURCE)
         return callX(classX(SQL_GINQ_RUNTIME_TYPE), 'execute',
-                args(dataSourceExpr, constX('SELECT * FROM ' + tableName), new ListExpression()))
+                args(dataSourceExpr, constX('SELECT * FROM ' + dialect.qualifiedName(tableName)), new ListExpression()))
     }
 
     private int mixedSeq

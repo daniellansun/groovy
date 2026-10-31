@@ -283,6 +283,33 @@ class GinqSqlTranslationTest {
     }
 
     @Test
+    void testInListContainingNull() {
+        GQL(provider: 'native-sql', dataSource: db) {
+            from e in 'employees'
+            where e.deptId in [null]
+            select e.name
+        }
+        assert 'SELECT e.name FROM employees e WHERE e.deptId IS NULL' == db.sqlText
+        assert [] == db.params
+
+        GQL(provider: 'native-sql', dataSource: db) {
+            from e in 'employees'
+            where e.deptId in [null, 1] || e.salary !in [null, 2000]
+            select e.name
+        }
+        assert 'SELECT e.name FROM employees e WHERE e.deptId IS NULL OR e.deptId IN (?) ' +
+                'OR e.salary IS NOT NULL AND e.salary NOT IN (?)' == db.sqlText
+        assert [1, 2000] == db.params
+
+        GQL(provider: 'native-sql', dataSource: db) {
+            from e in 'employees'
+            where e.deptId !in [null]
+            select e.name
+        }
+        assert 'SELECT e.name FROM employees e WHERE e.deptId IS NOT NULL' == db.sqlText
+    }
+
+    @Test
     void testEmptyInAndNullLikePattern() {
         def missing = null
         GQL(provider: 'native-sql', dataSource: db) {

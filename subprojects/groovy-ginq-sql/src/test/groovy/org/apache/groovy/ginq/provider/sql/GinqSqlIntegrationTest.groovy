@@ -539,6 +539,40 @@ class GinqSqlIntegrationTest {
     }
 
     @Test
+    void testInListContainingNullMatchesNull() {
+        def onlyNull = GQL(provider: 'native-sql', dataSource: db) {
+            from e in 'employees'
+            where e.deptId in [null]
+            select e.name
+        }
+        assert ['Dave'] == onlyNull.collect { it.name }
+
+        def withValue = GQL(provider: 'native-sql', dataSource: db) {
+            from e in 'employees'
+            where e.deptId in [1, null]
+            orderby e.name
+            select e.name
+        }
+        assert ['Alice', 'Bob', 'Dave'] == withValue.collect { it.name }
+
+        def excluded = GQL(provider: 'native-sql', dataSource: db) {
+            from e in 'employees'
+            where e.deptId !in [1, null]
+            orderby e.name
+            select e.name
+        }
+        assert ['Carol', 'Eve', 'Frank'] == excluded.collect { it.name }
+
+        def notNull = GQL(provider: 'native-sql', dataSource: db) {
+            from e in 'employees'
+            where e.deptId !in [null]
+            orderby e.name
+            select e.name
+        }
+        assert ['Alice', 'Bob', 'Carol', 'Eve', 'Frank'] == notNull.collect { it.name }
+    }
+
+    @Test
     void testEmptyInList() {
         def none = GQL(provider: 'native-sql', dataSource: db) {
             from e in 'employees'

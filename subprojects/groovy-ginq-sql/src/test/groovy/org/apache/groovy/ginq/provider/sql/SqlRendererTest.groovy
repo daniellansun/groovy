@@ -49,6 +49,8 @@ import org.apache.groovy.ginq.provider.sql.render.SqlRenderer
 import org.codehaus.groovy.ast.expr.ConstantExpression
 import org.junit.jupiter.api.Test
 
+import static groovy.test.GroovyAssert.shouldFail
+
 @CompileStatic
 class SqlRendererTest {
 
@@ -312,6 +314,27 @@ class SqlRendererTest {
     }
 
     @Test
+    void testSqliteRejectsFloorAndCeiling() {
+        def floor = shouldFail(IllegalArgumentException) {
+            new SqlRenderer(Dialects.resolve('sqlite')).render(functionQuery('FLOOR'))
+        }
+        assert floor.message.contains('FLOOR')
+        assert floor.message.contains('sqlite')
+        assert !floor.message.contains('SELECT')
+
+        def ceiling = shouldFail(IllegalArgumentException) {
+            new SqlRenderer(Dialects.resolve('sqlite')).render(functionQuery('CEILING'))
+        }
+        assert ceiling.message.contains('CEILING')
+        assert ceiling.message.contains('sqlite')
+
+        def ansi = new SqlRenderer(Dialects.resolve('ansi')).render(functionQuery('FLOOR'))
+        assert ansi.sql.contains('FLOOR(')
+        def h2 = new SqlRenderer(Dialects.resolve('h2')).render(functionQuery('CEILING'))
+        assert h2.sql.contains('CEILING(')
+    }
+
+    @Test
     void testCastAndSearchPosition() {
         def query = new SqlQuery()
         query.from = new SqlTableRef('employees', 'e')
@@ -334,6 +357,13 @@ class SqlRendererTest {
         assert sqlite.sql.contains('INSTR("e"."name", ?) - 1')
         assert !sqlite.sql.contains('POSITION')
         assert !sqlite.sql.contains('LOCATE')
+    }
+
+    private static SqlQuery functionQuery(String name) {
+        def query = new SqlQuery()
+        query.from = new SqlTableRef('employees', 'e')
+        query.projections << new SqlProjection(new SqlFunction(name, [col('e', 'salary')]))
+        return query
     }
 
     private static SqlQuery simpleQuery(String table) {

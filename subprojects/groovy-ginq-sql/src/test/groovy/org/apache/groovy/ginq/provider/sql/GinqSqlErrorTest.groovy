@@ -234,6 +234,29 @@ class GinqSqlErrorTest {
     }
 
     @Test
+    void testSqliteRejectsFloorAndCeiling() {
+        def floor = shouldFail '''\
+            GQ(provider: 'native-sql', dialect: 'sqlite', dataSource: db) {
+                from e in 'employees'
+                select e.salary.floor()
+            }
+        '''
+        assert floor.message.contains('FLOOR')
+        assert floor.message.contains('sqlite')
+        assert floor.message.contains('floor()')
+
+        def ceiling = shouldFail '''\
+            GQ(provider: 'native-sql', dialect: 'sqlite', dataSource: db) {
+                from e in 'employees'
+                select e.salary.ceil()
+            }
+        '''
+        assert ceiling.message.contains('CEILING')
+        assert ceiling.message.contains('sqlite')
+        assert ceiling.message.contains('ceil()')
+    }
+
+    @Test
     void testUnknownNativeDialect() {
         def err = shouldFail '''\
             GQ(provider: 'native-sql', dialect: 'ORACLE', dataSource: db) {

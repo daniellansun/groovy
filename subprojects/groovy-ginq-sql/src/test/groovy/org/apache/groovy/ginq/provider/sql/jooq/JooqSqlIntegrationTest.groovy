@@ -197,4 +197,22 @@ class JooqSqlIntegrationTest {
         }
         assert ['Carol'] == result.collect { it.name }
     }
+
+    @Test
+    void testInListContainingNullMatchesNull() {
+        def onlyNull = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
+            from e in 'employees'
+            where e.deptId in [null]
+            select e.name
+        }
+        assert ['Dave'] == onlyNull.collect { it.name }
+
+        def excluded = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
+            from e in 'employees'
+            where e.deptId !in [1, null]
+            orderby e.name
+            select e.name
+        }
+        assert ['Carol', 'Eve', 'Frank'] == excluded.collect { it.name }
+    }
 }

@@ -300,8 +300,7 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
         if (dataSourceExpr instanceof ConstantExpression && dataSourceExpr.value instanceof String) {
             String tableName = (String) dataSourceExpr.value
             if (!plainTableName(tableName)) {
-                reject("table name `${tableName}` must be a simple identifier or a schema-qualified name such as `hr.employees`. " +
-                        'A quoting `table()` helper is not supported yet', dataSourceExpr, false)
+                reject(invalidTableNameMessage(tableName), dataSourceExpr, false)
                 return null
             }
             return new SqlTableRef(tableName, alias)
@@ -528,8 +527,7 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
                     // `x in []` is false and `x !in []` is true, including when x is null
                     return new SqlBinary('=', new SqlLiteral(1), new SqlLiteral('!in' == op ? 1 : 0))
                 }
-                List<SqlExpr> values = elements.collect { Expression e -> translateExpr(e) }
-                return new SqlIn(translateExpr(left), values, '!in' == op)
+                return translateInList(left, elements, '!in' == op)
             case '==':
             case '!=':
                 boolean negated = '!=' == op
@@ -559,6 +557,30 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
                 reject("Operator `${op}` cannot be translated to SQL by the ${providerName} provider", expr)
                 return null
         }
+    }
+
+    // `x in [null, 1]` is true for a null x. SQL `IN` is unknown when the list
+    // contains null, and `NOT IN` is unknown for every row, so null members
+    // become IS NULL / IS NOT NULL and the remaining values stay in the list.
+    private SqlExpr translateInList(Expression left, List<Expression> elements, boolean negated) {
+        List<SqlExpr> values = []
+        boolean includesNull = false
+        for (Expression element : elements) {
+            if (isNullLiteral(element)) {
+                includesNull = true
+            } else {
+                values.add(translateExpr(element))
+            }
+        }
+        SqlExpr member = translateExpr(left)
+        if (values.isEmpty()) {
+            return new SqlIsNull(member, negated)
+        }
+        SqlIn inList = new SqlIn(member, values, negated)
+        if (!includesNull) {
+            return inList
+        }
+        return new SqlBinary(negated ? 'AND' : 'OR', new SqlIsNull(member, negated), inList)
     }
 
     private static boolean isNullLiteral(Expression expr) {
@@ -1138,7 +1160,14 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
         error(hintMixedMode ? message + MIXED_HINT : message, node)
     }
 
-    private static boolean plainTableName(String name) {
+    @PackageScope
+    static String invalidTableNameMessage(String tableName) {
+        return "table name `${tableName}` must be a simple identifier or a schema-qualified name such as `hr.employees`. " +
+                'A quoting `table()` helper is not supported yet'
+    }
+
+    @PackageScope
+    static boolean plainTableName(String name) {
         if (!name) return false
         for (String part : name.split('\\.', -1)) {
             if (!simpleIdentifier(part)) return false

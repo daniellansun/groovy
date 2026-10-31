@@ -42,6 +42,27 @@ public interface Dialect {
     }
 
     /**
+     * Renders a simple or schema-qualified name. Each part is passed through
+     * {@link #identifier(String)}, so quoting matches other table and column
+     * references in this dialect.
+     *
+     * @param name a plain table name, possibly schema-qualified
+     * @return the rendered name
+     * @since 6.0.0
+     */
+    default String qualifiedName(String name) {
+        String[] parts = name.split("\\.", -1);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < parts.length; i++) {
+            if (i > 0) {
+                sb.append('.');
+            }
+            sb.append(identifier(parts[i]));
+        }
+        return sb.toString();
+    }
+
+    /**
      * Maps an ANSI function name, e.g. {@code UPPER} or {@code SUM},
      * to its dialect-specific counterpart. {@code GREATEST} and {@code LEAST}
      * are included; a dialect that spells those as scalar {@code MAX} and

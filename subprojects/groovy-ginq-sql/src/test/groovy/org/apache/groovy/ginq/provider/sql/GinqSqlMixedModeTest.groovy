@@ -243,6 +243,32 @@ class GinqSqlMixedModeTest {
     }
 
     @Test
+    void testMixedModeNestedTableNameIsValidated() {
+        def err = shouldFail '''\
+            GQ(provider: 'native-sql', mixedMode: true, dataSource: db) {
+                from e in 'employees'
+                where e.name.reverse() == 'x' && (from d in 'departments; delete from departments' where d.id == e.deptId select d.id).exists()
+                select e.name
+            }
+        '''
+        assert err.message.contains('table name `departments; delete from departments` must be a simple identifier')
+        assert !err.message.contains('SELECT * FROM departments;')
+    }
+
+    @Test
+    void testMixedModeDeferredJoinTableNameIsValidated() {
+        def err = shouldFail '''\
+            GQ(provider: 'native-sql', mixedMode: true, dataSource: db) {
+                from e in 'employees'
+                join d in 'departments; delete from departments' on e.deptId == d.id
+                select e.name.reverse()
+            }
+        '''
+        assert err.message.contains('table name `departments; delete from departments` must be a simple identifier')
+        assert !err.message.contains('SELECT * FROM departments;')
+    }
+
+    @Test
     void testMixedModeDoesNotSplitSetOperations() {
         def err = shouldFail '''\
             GQ(provider: 'native-sql', mixedMode: true, dataSource: db) {

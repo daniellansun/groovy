@@ -149,6 +149,11 @@ public final class Dialects {
                     return "MAX";
                 case "LEAST":
                     return "MIN";
+                case "FLOOR":
+                case "CEILING":
+                    throw new IllegalArgumentException(ansiName
+                            + " is not supported by the sqlite dialect. Rewrite the query without floor() or ceil(),"
+                            + " or use a dialect that provides those functions");
                 default:
                     return ansiName;
             }
