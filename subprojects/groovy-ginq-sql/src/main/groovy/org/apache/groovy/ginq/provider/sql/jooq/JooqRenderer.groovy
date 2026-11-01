@@ -80,7 +80,7 @@ import java.util.regex.Matcher
  * dispatch could select Groovy GDK extension methods, e.g. {@code groupBy},
  * over jOOQ's own.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

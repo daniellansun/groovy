@@ -36,7 +36,7 @@ import java.util.ServiceLoader;
  * register additional implementations via
  * {@code META-INF/services/org.apache.groovy.ginq.provider.GinqProvider}.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 public interface GinqProvider {
@@ -65,5 +65,44 @@ public interface GinqProvider {
      */
     default List<String> getAdditionalOptionNames() {
         return Collections.emptyList();
+    }
+
+    /**
+     * Checks whether this provider's dependencies can be loaded from {@code loader}.
+     * Providers with optional dependencies, such as jOOQ, probe with
+     * {@link #canLoad(ClassLoader, String)} and return a message naming the
+     * missing artifact. The default implementation has no extra dependencies
+     * and returns {@code null}.
+     * <p>
+     * {@code provider: 'sql'} skips a provider that reports a missing dependency
+     * and tries the next candidate. An explicit provider name that reports one
+     * is rejected with that message, before its AST walker is loaded.
+     *
+     * @param loader the class loader that will load the provider implementation
+     * @return {@code null} when the provider can be selected, otherwise the reason it cannot
+     * @since 7.0.0
+     */
+    default String unavailableReason(ClassLoader loader) {
+        return null;
+    }
+
+    /**
+     * Returns whether {@code className} can be loaded from {@code loader}
+     * without initializing it. A missing class or a linkage error means the
+     * dependency is not usable. Provider implementations use this from
+     * {@link #unavailableReason(ClassLoader)}.
+     *
+     * @param loader the class loader to probe; {@code null} is the bootstrap loader
+     * @param className the binary name of a class from the dependency
+     * @return {@code true} when the class can be loaded
+     * @since 7.0.0
+     */
+    static boolean canLoad(ClassLoader loader, String className) {
+        try {
+            Class.forName(className, false, loader);
+            return true;
+        } catch (ClassNotFoundException | LinkageError ignored) {
+            return false;
+        }
     }
 }

@@ -33,7 +33,7 @@ import java.util.Locale
  * {@code NUMERIC} ({@code DECIMAL(10,2)}). Other parameterized forms,
  * including {@code INT(11)} and {@code TIMESTAMP(6)}, are rejected.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

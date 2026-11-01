@@ -39,7 +39,7 @@ import java.util.Map;
  * calls {@link #execute(Object, String, List)} with the compile-time constant
  * SQL text and the runtime parameter values.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 public final class SqlGinqRuntime {

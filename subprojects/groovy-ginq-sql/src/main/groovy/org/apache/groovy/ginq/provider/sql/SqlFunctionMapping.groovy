@@ -42,7 +42,7 @@ import org.codehaus.groovy.ast.expr.MethodCallExpression
  * {@code contains}) are still registry entries; a further shape is a new
  * shape constant and a branch in {@link #translate}.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

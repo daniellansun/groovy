@@ -26,7 +26,7 @@ import java.util.List;
 /**
  * Registers the dependency-free {@code native-sql} GINQ provider.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 public class NativeSqlGinqProvider implements GinqProvider {
@@ -58,5 +58,16 @@ public class NativeSqlGinqProvider implements GinqProvider {
     @Override
     public List<String> getAdditionalOptionNames() {
         return List.of(CONF_MIXED_MODE, CONF_DIALECT);
+    }
+
+    /**
+     * {@code native-sql} needs {@code groovy-sql} and nothing from jOOQ.
+     */
+    @Override
+    public String unavailableReason(ClassLoader loader) {
+        if (GinqProvider.canLoad(loader, "groovy.sql.Sql")) {
+            return null;
+        }
+        return "the native-sql provider requires org.apache.groovy:groovy-sql on the compile classpath";
     }
 }

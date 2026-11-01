@@ -27,7 +27,7 @@ import org.apache.groovy.lang.annotation.Incubating
  * When {@code distinct} is set, the call is an aggregate
  * {@code COUNT(DISTINCT ...)}.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

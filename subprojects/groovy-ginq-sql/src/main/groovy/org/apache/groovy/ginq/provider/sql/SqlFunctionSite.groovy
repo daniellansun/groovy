@@ -31,7 +31,7 @@ import org.codehaus.groovy.ast.expr.MethodCallExpression
  * {@code SUBSTRING} with Groovy's 0-based indexes — are translated here
  * so the mapping stays a registry entry.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

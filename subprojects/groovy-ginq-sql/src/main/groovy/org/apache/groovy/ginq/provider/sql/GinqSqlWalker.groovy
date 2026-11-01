@@ -83,7 +83,7 @@ import static org.codehaus.groovy.ast.tools.GeneralUtils.varX
  * equivalent SQL, rendered at compile time with all user values bound as
  * positional parameters, against the configured {@code dataSource}.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

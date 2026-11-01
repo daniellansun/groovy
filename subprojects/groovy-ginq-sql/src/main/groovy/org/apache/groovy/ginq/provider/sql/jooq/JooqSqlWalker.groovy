@@ -33,7 +33,7 @@ import org.jooq.SQLDialect
  * {@link SQLDialect}, giving dialect-aware SQL, function mapping and
  * limit/offset rendering. jOOQ is required on the compile classpath only.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic
@@ -60,7 +60,7 @@ class JooqSqlWalker extends GinqSqlWalker {
         try {
             return JooqRenderer.render(queryNode, dialectName)
         } catch (NoClassDefFoundError ignore) {
-            error('the jooq-sql provider requires org.jooq:jooq on the compile classpath', expression)
+            error(JooqSqlGinqProvider.MISSING_JOOQ_MESSAGE, expression)
         } catch (IllegalArgumentException e) {
             error(e.message, expression)
         }

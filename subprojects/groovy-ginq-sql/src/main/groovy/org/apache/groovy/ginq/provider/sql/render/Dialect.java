@@ -25,7 +25,7 @@ import org.apache.groovy.lang.annotation.Incubating;
  * Abstracts the dialect-specific concerns of the native SQL renderer.
  * The defaults produce ANSI SQL.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 public interface Dialect {
@@ -48,7 +48,7 @@ public interface Dialect {
      *
      * @param name a plain table name, possibly schema-qualified
      * @return the rendered name
-     * @since 6.0.0
+     * @since 7.0.0
      */
     default String qualifiedName(String name) {
         String[] parts = name.split("\\.", -1);
@@ -82,7 +82,7 @@ public interface Dialect {
      * return 0 when the text is absent.
      *
      * @return the spelling
-     * @since 6.0.0
+     * @since 7.0.0
      */
     default SearchPosition searchPosition() {
         return SearchPosition.POSITION_IN;
@@ -91,7 +91,7 @@ public interface Dialect {
     /**
      * Spelling of the search behind Groovy {@code indexOf}.
      *
-     * @since 6.0.0
+     * @since 7.0.0
      */
     enum SearchPosition {
         /** {@code POSITION(needle IN haystack)}. */
@@ -108,7 +108,7 @@ public interface Dialect {
      * accept {@code SUBSTR(x, start, length)} return {@code false}.
      *
      * @return {@code true} for the ANSI form
-     * @since 6.0.0
+     * @since 7.0.0
      */
     default boolean substringFromFor() {
         return true;
@@ -119,7 +119,7 @@ public interface Dialect {
      * {@code %} operator return {@code false}.
      *
      * @return {@code true} when {@code MOD} is a function
-     * @since 6.0.0
+     * @since 7.0.0
      */
     default boolean moduloFunction() {
         return true;
@@ -131,7 +131,7 @@ public interface Dialect {
      * results stay faithful to GINQ, which defaults to nulls last.
      *
      * @return {@code true} when the dialect has explicit null ordering
-     * @since 6.0.0
+     * @since 7.0.0
      */
     default boolean explicitNullOrdering() {
         return true;
@@ -142,7 +142,7 @@ public interface Dialect {
      * rather than integer truncation.
      *
      * @return the type name
-     * @since 6.0.0
+     * @since 7.0.0
      */
     default String realTypeName() {
         return "DOUBLE";
@@ -167,7 +167,7 @@ public interface Dialect {
      * @param offset the offset expression, or {@code null}
      * @param fetch the row-count expression, or {@code null}
      * @param out receives clause text and expressions
-     * @since 6.0.0
+     * @since 7.0.0
      */
     default void renderLimit(SqlExpr offset, SqlExpr fetch, LimitRender out) {
         if (offset != null) {
@@ -185,7 +185,7 @@ public interface Dialect {
     /**
      * Receives the text and expressions of a limit clause, in placeholder order.
      *
-     * @since 6.0.0
+     * @since 7.0.0
      */
     interface LimitRender {
         /**

@@ -26,7 +26,7 @@ import org.apache.groovy.lang.annotation.Incubating
  * type from {@link SqlCastTypes}, never a bound parameter or an arbitrary
  * fragment of SQL.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

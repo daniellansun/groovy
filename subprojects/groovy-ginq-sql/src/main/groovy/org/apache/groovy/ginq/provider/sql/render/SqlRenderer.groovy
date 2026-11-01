@@ -55,7 +55,7 @@ import org.codehaus.groovy.ast.expr.Expression
  * collecting the parameter value expressions in emission order so they are
  * guaranteed to match the placeholders.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

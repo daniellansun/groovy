@@ -28,7 +28,7 @@ import java.util.Locale;
  * GEP-26: limit/offset syntax, identifier quoting, and a few function names.
  * Comprehensive dialect coverage stays with the jOOQ provider.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 public final class Dialects {

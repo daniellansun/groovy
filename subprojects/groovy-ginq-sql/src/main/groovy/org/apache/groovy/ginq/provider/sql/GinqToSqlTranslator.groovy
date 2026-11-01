@@ -104,7 +104,7 @@ import static org.codehaus.groovy.ast.tools.GeneralUtils.varX
  * {@link #recoverUntranslatable} set, constructs that have no SQL equivalent
  * raise {@link Untranslatable} so mixed mode can move that clause in memory.
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

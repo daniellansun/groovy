@@ -37,7 +37,7 @@ import org.apache.groovy.lang.annotation.Incubating
  * when the value is already longer; Groovy does not), and {@code Math.signum}
  * ({@code SIGN}'s numeric type differs by dialect).
  *
- * @since 6.0.0
+ * @since 7.0.0
  */
 @Incubating
 @CompileStatic

@@ -74,7 +74,7 @@ public @interface GQ {
      * cannot be supplied via an annotation; use the macro form instead, e.g.
      * {@code GQ(provider: 'native-sql', dataSource: db) {...}}.
      *
-     * @since 6.0.0
+     * @since 7.0.0
      */
     @Incubating
     String provider() default "collection";
