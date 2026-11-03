@@ -122,21 +122,19 @@ jobs:
         # dists are cached by the explicit branch-keyed step above instead.
         with:
           cache-disabled: true
-      # Windows Defender real-time scanning is on for windows-latest. The same
-      # :test classes take about 1.4× as long as on ubuntu-latest, and each
-      # forkEvery JVM pays again to read the JDK and the Gradle cache. Gradle's
-      # performance guide says to exclude the project directory and the Gradle
-      # user home from antivirus scanning; Add-MpPreference is the supported
-      # Microsoft mechanism. Real-time protection stays enabled for the rest of
-      # the image (actions, the runner, system files). java.exe is excluded
-      # because the test and daemon JVMs are what read those jars and write
-      # class files. The runner is ephemeral and this job already executes the
-      # repo under test.
+      # Windows Defender stays in the way after path exclusions. On
+      # daniellansun/groovy run 41549675736, maxParallelForks=2 and exclusions
+      # for D:\a, the JDK, and java.exe were all recorded, and Ubuntu's test
+      # step fell from ~33 min to 24m02s. Windows stayed at 44m24s. The HTML
+      # reports show both forks ran (sum of class times > suite wall clock on
+      # both OSes) but Windows class time was 2.0× Ubuntu, which cancelled the
+      # overlap. Real-time and behavior monitoring serialize file and process
+      # events across those forks.
       #
-      # Paths cover the checkout, ~/.gradle, and GRADLE_USER_HOME. setup-gradle
-      # may set GRADLE_USER_HOME to D:\a\.gradle; excluding the Actions work
-      # root covers that directory. This step does not change the cache paths
-      # above or the grape scrub below.
+      # For this ephemeral job only, turn that monitoring off. The VM is
+      # discarded when the job ends, and the job already executes the suite.
+      # Path exclusions stay as a backstop. This step does not change the cache
+      # paths above or the grape scrub below. macOS and Linux skip it.
       - name: "🛡️ Exclude build paths from Windows Defender"
         if: runner.os == 'Windows'
         shell: powershell
@@ -194,6 +192,25 @@ jobs:
           Add-MpPreference -ExclusionProcess 'java.exe'
           Write-Host 'excluded process: java.exe'
 
+          # Exclusions alone did not move the Windows test step (see the
+          # comment on this step). Real-time monitoring scans every class file
+          # the two forks write; behavior monitoring hooks each forkEvery
+          # CreateProcess. Both stay off for the rest of this job.
+          Set-MpPreference -DisableRealtimeMonitoring $true
+          try {
+            Set-MpPreference -DisableBehaviorMonitoring $true -ErrorAction Stop
+            Write-Host 'set DisableBehaviorMonitoring'
+          } catch {
+            Write-Host "could not set DisableBehaviorMonitoring: $($_.Exception.Message)"
+          }
+          try {
+            Set-MpPreference -DisableIOAVProtection $true -ErrorAction Stop
+            Write-Host 'set DisableIOAVProtection'
+          } catch {
+            Write-Host "could not set DisableIOAVProtection: $($_.Exception.Message)"
+          }
+
+          Start-Sleep -Seconds 2
           $pref = Get-MpPreference
           $havePaths = @($pref.ExclusionPath)
           $missing = @()
@@ -216,7 +233,10 @@ jobs:
           if (@($pref.ExclusionProcess) -notcontains 'java.exe') {
             throw 'Defender is missing the java.exe process exclusion'
           }
-          Write-Host 'Windows Defender exclusions recorded. Real-time protection remains enabled.'
+          if (-not $pref.DisableRealtimeMonitoring) {
+            throw 'Windows Defender real-time monitoring is still enabled'
+          }
+          Write-Host "Windows Defender real-time monitoring disabled for this job (behavior=$($pref.DisableBehaviorMonitoring) ioav=$($pref.DisableIOAVProtection))."
       - name: "🔍 Setup TestLens"
         uses: testlens-app/setup-testlens@d29a2be31512b3aeda3adcef09fbe0d55af90c51 # v1.9.4
       # Pre-warm the @Grab artifact cache by fetching each unique Maven-shorthand
