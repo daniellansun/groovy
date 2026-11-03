@@ -122,6 +122,101 @@ jobs:
         # dists are cached by the explicit branch-keyed step above instead.
         with:
           cache-disabled: true
+      # Windows Defender real-time scanning is on for windows-latest. The same
+      # :test classes take about 1.4× as long as on ubuntu-latest, and each
+      # forkEvery JVM pays again to read the JDK and the Gradle cache. Gradle's
+      # performance guide says to exclude the project directory and the Gradle
+      # user home from antivirus scanning; Add-MpPreference is the supported
+      # Microsoft mechanism. Real-time protection stays enabled for the rest of
+      # the image (actions, the runner, system files). java.exe is excluded
+      # because the test and daemon JVMs are what read those jars and write
+      # class files. The runner is ephemeral and this job already executes the
+      # repo under test.
+      #
+      # Paths cover the checkout, ~/.gradle, and GRADLE_USER_HOME. setup-gradle
+      # may set GRADLE_USER_HOME to D:\a\.gradle; excluding the Actions work
+      # root covers that directory. This step does not change the cache paths
+      # above or the grape scrub below.
+      - name: "🛡️ Exclude build paths from Windows Defender"
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $script:paths = New-Object System.Collections.Generic.List[string]
+          function Add-Candidate([string] $path) {
+            if ([string]::IsNullOrWhiteSpace($path)) { return }
+            $full = [System.IO.Path]::GetFullPath($path.TrimEnd('\', '/'))
+            # Never exclude a drive root.
+            if ($full.Length -le 3) { return }
+            foreach ($existing in $script:paths) {
+              if ($full.Equals($existing, [StringComparison]::OrdinalIgnoreCase)) { return }
+              if ($full.StartsWith($existing + '\', [StringComparison]::OrdinalIgnoreCase)) { return }
+            }
+            for ($i = $script:paths.Count - 1; $i -ge 0; $i--) {
+              if ($script:paths[$i].StartsWith($full + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                $script:paths.RemoveAt($i)
+              }
+            }
+            $script:paths.Add($full)
+          }
+
+          $ws = $env:GITHUB_WORKSPACE
+          if ($ws) {
+            $parent = Split-Path $ws -Parent
+            if ($parent) {
+              $workRoot = Split-Path $parent -Parent
+              if ($workRoot -and (Split-Path $workRoot -Parent)) {
+                Add-Candidate $workRoot
+              }
+            }
+            Add-Candidate $ws
+          }
+          if ($env:USERPROFILE) {
+            foreach ($name in @('.gradle', '.groovy', '.m2')) {
+              Add-Candidate (Join-Path $env:USERPROFILE $name)
+            }
+          }
+          Add-Candidate $env:GRADLE_USER_HOME
+          Add-Candidate $env:RUNNER_TEMP
+          Add-Candidate $env:JAVA_HOME
+          Get-ChildItem Env: | Where-Object { $_.Name -like 'JAVA_HOME_*' } | ForEach-Object {
+            Add-Candidate $_.Value
+          }
+
+          if ($script:paths.Count -eq 0) {
+            throw 'No Defender exclusion paths were derived from the runner environment'
+          }
+          foreach ($p in $script:paths) {
+            Add-MpPreference -ExclusionPath $p
+            Write-Host "excluded path: $p"
+          }
+          Add-MpPreference -ExclusionProcess 'java.exe'
+          Write-Host 'excluded process: java.exe'
+
+          $pref = Get-MpPreference
+          $havePaths = @($pref.ExclusionPath)
+          $missing = @()
+          foreach ($p in $script:paths) {
+            $ok = $false
+            foreach ($h in $havePaths) {
+              if (-not $h) { continue }
+              $hn = $h.TrimEnd('\')
+              if ($hn.Equals($p, [StringComparison]::OrdinalIgnoreCase) -or
+                  $p.StartsWith($hn + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                $ok = $true
+                break
+              }
+            }
+            if (-not $ok) { $missing += $p }
+          }
+          if ($missing.Count -gt 0) {
+            throw ("Defender is missing path exclusions: " + ($missing -join ', '))
+          }
+          if (@($pref.ExclusionProcess) -notcontains 'java.exe') {
+            throw 'Defender is missing the java.exe process exclusion'
+          }
+          Write-Host 'Windows Defender exclusions recorded. Real-time protection remains enabled.'
       - name: "🔍 Setup TestLens"
         uses: testlens-app/setup-testlens@d29a2be31512b3aeda3adcef09fbe0d55af90c51 # v1.9.4
       # Pre-warm the @Grab artifact cache by fetching each unique Maven-shorthand

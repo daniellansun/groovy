@@ -18,7 +18,9 @@
  */
 package org.apache.groovy.gradle
 
+import com.sun.management.OperatingSystemMXBean
 import groovy.transform.CompileStatic
+import java.lang.management.ManagementFactory
 import org.gradle.StartParameter
 import org.gradle.api.execution.TaskExecutionGraph
 import org.gradle.api.file.ProjectLayout
@@ -85,6 +87,14 @@ class SharedConfiguration {
         String userdir = providers.systemProperty('user.dir').get()
         logger.lifecycle "Using Java from $javaHome (version ${javaVersion})"
         logger.lifecycle "user.dir: ${userdir}"
+        int forks = getTestMaxParallelForks()
+        int active = getTestActiveProcessorCount()
+        Long ram = totalPhysicalMemoryBytes()
+        logger.lifecycle "Test parallelism: maxParallelForks=${forks}" +
+                " concurrentTestTasks=${TEST_MAX_CONCURRENT_TASKS}" +
+                " ActiveProcessorCount=${active}" +
+                " processors=${availableProcessors()}" +
+                " physicalMemoryBytes=${ram == null ? 'unknown' : ram}"
     }
 
     /**
@@ -96,21 +106,67 @@ class SharedConfiguration {
      */
     static final int TEST_MAX_CONCURRENT_TASKS = 2
 
+    /**
+     * CI test JVMs per task on a runner large enough to match a 6-core
+     * workstation (2 forks × {@link #TEST_MAX_CONCURRENT_TASKS} tasks).
+     * Not higher: the July 2026 Windows resets were an uncapped
+     * {@code processors/2} on every test task at once, before the limiter.
+     */
+    private static final int CI_TEST_MAX_PARALLEL_FORKS = 2
+
+    /** Public GHA images pair 4 vCPU with 16 GiB. Below this, stay at one fork. */
+    private static final int CI_TWO_FORK_MIN_PROCESSORS = 4
+
+    /**
+     * macOS {@code macos-latest} is 3 vCPU / 7 GiB and already runs two 2g
+     * test JVMs plus the daemon. Private 2-vCPU Windows images are 8 GiB.
+     * 12 GiB leaves those on one fork and admits the 16 GiB Linux/Windows images.
+     */
+    private static final long CI_TWO_FORK_MIN_MEMORY_BYTES = 12L * 1024L * 1024L * 1024L
+
     /** Processors the daemon JVM sees; used to size forks and {@code ActiveProcessorCount}. */
     static int availableProcessors() {
         Runtime.runtime.availableProcessors()
     }
 
     /**
+     * Physical RAM of the machine running the daemon, or {@code null} when
+     * the JVM does not expose it. This is not the daemon heap.
+     */
+    static Long totalPhysicalMemoryBytes() {
+        Object os = ManagementFactory.operatingSystemMXBean
+        if (os instanceof OperatingSystemMXBean) {
+            long bytes = ((OperatingSystemMXBean) os).totalPhysicalMemorySize
+            return bytes > 0L ? bytes : null
+        }
+        return null
+    }
+
+    /**
      * {@code maxParallelForks} for {@code Test} tasks.
-     * CI stays at 1 (GHA RAM and worker-teardown races). Locally leave ~2
-     * CPUs for GC/OS/IDE, then one fork per remaining pair: 6-core → 2,
-     * 8-core → 3, 16-core → 7. Combined with {@link #TEST_MAX_CONCURRENT_TASKS}
-     * that is 4 workers on a 6-core box rather than 6, which otherwise
-     * each size G1/C2 as if they owned all 6 CPUs (load 16–18).
+     * CI with at least {@link #CI_TWO_FORK_MIN_PROCESSORS} processors and
+     * {@link #CI_TWO_FORK_MIN_MEMORY_BYTES} of RAM uses
+     * {@link #CI_TEST_MAX_PARALLEL_FORKS}. That is the public
+     * ubuntu-latest / windows-latest shape (4 vCPU, 16 GiB). Peak test JVMs
+     * stay at 4, {@code -Xmx} stays 2g with {@code -Xms} 256m (a ceiling, not
+     * a reservation), and {@link #getTestActiveProcessorCount()} drops to 1
+     * so the extra JVMs do not each size G1 for every core. Smaller runners
+     * — macos-latest at 3 vCPU / 7 GiB, and 2-vCPU private Windows — stay at
+     * 1. Do not drop {@link #TEST_MAX_CONCURRENT_TASKS} to buy forks: the
+     * second slot is full of other modules for most of {@code :test}.
+     * Locally leave ~2 CPUs for GC/OS/IDE, then one fork per remaining pair:
+     * 6-core → 2, 8-core → 3, 16-core → 7. Combined with
+     * {@link #TEST_MAX_CONCURRENT_TASKS} that is 4 workers on a 6-core box
+     * rather than 6, which otherwise each size G1/C2 as if they owned all
+     * 6 CPUs (load 16–18).
      */
     int getTestMaxParallelForks() {
         if (isRunningOnCI) {
+            Long ram = totalPhysicalMemoryBytes()
+            if (availableProcessors() >= CI_TWO_FORK_MIN_PROCESSORS &&
+                    ram != null && ram >= CI_TWO_FORK_MIN_MEMORY_BYTES) {
+                return CI_TEST_MAX_PARALLEL_FORKS
+            }
             return 1
         }
         int n = availableProcessors()
@@ -122,7 +178,8 @@ class SharedConfiguration {
 
     /**
      * Concurrent forked {@code GroovyCompile} workers.
-     * CI stays at 2 (1g groovyc overlapping 2g Test OOMs GHA).
+     * CI stays at 2. Four 2g test JVMs on a 16 GiB runner already overlap
+     * these 1g workers; raising the compile cap is what OOMs GHA.
      * Locally {@code max(2, nproc/4)} so a 6-core box stays at 2 and a
      * 16-core box can use 4 — do not use nproc/2, which adds fully-sized
      * G1 workers on the same CPUs the Test limiter already occupies.
