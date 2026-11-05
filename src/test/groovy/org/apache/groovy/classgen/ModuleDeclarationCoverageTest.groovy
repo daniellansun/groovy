@@ -1,0 +1,160 @@
+/*
+ *  Licensed to the Apache Software Foundation (ASF) under one
+ *  or more contributor license agreements.  See the NOTICE file
+ *  distributed with this work for additional information
+ *  regarding copyright ownership.  The ASF licenses this file
+ *  to you under the Apache License, Version 2.0 (the
+ *  "License"); you may not use this file except in compliance
+ *  with the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing,
+ *  software distributed under the License is distributed on an
+ *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ *  KIND, either express or implied.  See the License for the
+ *  specific language governing permissions and limitations
+ *  under the License.
+ */
+package org.apache.groovy.classgen
+
+import org.apache.groovy.ast.ModuleDeclarationNode
+import org.apache.groovy.ast.ModuleDeclarationNode.Exports
+import org.apache.groovy.ast.ModuleDeclarationNode.Opens
+import org.apache.groovy.ast.ModuleDeclarationNode.Provides
+import org.apache.groovy.ast.ModuleDeclarationNode.Requires
+import org.apache.groovy.ast.ModuleDeclarationNode.Uses
+import org.codehaus.groovy.ast.AnnotationNode
+import org.codehaus.groovy.ast.ClassHelper
+import org.codehaus.groovy.ast.ClassNode
+import org.codehaus.groovy.ast.CompileUnit
+import org.codehaus.groovy.ast.ImportNode
+import org.codehaus.groovy.ast.ModuleNode
+import org.codehaus.groovy.classgen.AsmClassGenerator
+import org.codehaus.groovy.classgen.GeneratorContext
+import org.codehaus.groovy.control.CompilerConfiguration
+import org.codehaus.groovy.control.ErrorCollector
+import org.codehaus.groovy.control.SourceUnit
+import org.junit.jupiter.api.Test
+import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.Opcodes
+
+import java.lang.module.ModuleDescriptor
+
+/**
+ * Branches that the pipeline does not reach on its own: guards, the module reader
+ * required by {@code ModuleReference}, and emitter fallbacks.
+ */
+final class ModuleDeclarationCoverageTest {
+
+    @Test
+    void testSourceNameAndMissingDeclaration() {
+        assert !ModuleDeclarationNode.isModuleInfoSource(null)
+        assert !ModuleDeclarationNode.isModuleInfoSource('')
+        assert !ModuleDeclarationNode.isModuleInfoSource('Foo.groovy')
+        assert ModuleDeclarationNode.isModuleInfoSource('module-info.groovy')
+        assert ModuleDeclarationNode.isModuleInfoSource('module-info.java')
+        assert ModuleDeclarationNode.isModuleInfoSource('src/module-info.groovy')
+        assert ModuleDeclarationNode.isModuleInfoSource('src\\module-info.java')
+        assert ModuleDeclarationNode.of(null) == null
+        assert ModuleDeclarationNode.of(new ClassNode('Foo', 0, ClassHelper.OBJECT_TYPE)) == null
+
+        def config = new CompilerConfiguration()
+        def loader = new GroovyClassLoader()
+        def source = new SourceUnit('Foo.groovy', 'class Foo {}', config, loader, new ErrorCollector(config))
+        def guarded = new ClassNode('module-info', 0, ClassHelper.OBJECT_TYPE)
+        guarded.putNodeMetaData(ModuleDeclarationNode.class, new ModuleDeclarationNode('demo.guard', false, []))
+        ModuleDeclarationVerifier.check(null, guarded)
+        ModuleDeclarationVerifier.check(source, new ClassNode('Foo', 0, ClassHelper.OBJECT_TYPE))
+    }
+
+    @Test
+    void testVerifierWithoutCompileUnit() {
+        def config = new CompilerConfiguration()
+        def loader = new GroovyClassLoader()
+        def looseDir = File.createTempDir()
+        def loose = new File(looseDir, 'Loose.class')
+        def cw = new org.objectweb.asm.ClassWriter(0)
+        cw.visit(Opcodes.V17, Opcodes.ACC_PUBLIC, 'Loose', null, 'java/lang/Object', null)
+        cw.visitEnd()
+        loose.bytes = cw.toByteArray()
+        loader.addClasspath(looseDir.absolutePath)
+        def source = new SourceUnit('module-info.groovy',
+            'import Loose; module demo.direct { uses Loose; uses java.lang.Runnable; uses List; uses NotAType; }',
+            config, loader, new ErrorCollector(config))
+        source.parse()
+        source.completePhase()
+        source.convert()
+        def moduleInfo = source.AST.classes.find { it.name == 'module-info' }
+        def declaration = ModuleDeclarationNode.of(moduleInfo)
+        declaration.addAnnotation(new AnnotationNode(ClassHelper.make('missing.Anno')))
+        // Static-star import node carries a null package name; simple-name lookup must skip it.
+        source.AST.starImports << new ImportNode(ClassHelper.OBJECT_TYPE)
+        source.AST.starImports << new ImportNode('')
+        // Package name without a trailing dot, so the normalizer branch runs.
+        source.AST.starImports << new ImportNode('java.util')
+        assert source.AST.unit == null
+        ModuleDeclarationVerifier.check(source, moduleInfo)
+        def messages = (0..<source.errorCollector.errorCount).collect { source.errorCollector.getSyntaxError(it)?.message }.join('\n')
+        assert messages.contains('not accessible')
+        assert declaration.uses.find { it.serviceName == 'java.lang.Runnable' }.resolvedType.name == 'java.lang.Runnable'
+    }
+
+    @Test
+    void testCompilingModuleReferenceReader() {
+        def descriptor = ModuleDescriptor.newModule('demo.reader').build()
+        def reference = new ModuleDeclarationVerifier.CompilingModuleReference(descriptor)
+        def reader = reference.open()
+        assert reader.find('module-info.class').isEmpty()
+        assert reader.list().count() == 0
+        reader.close()
+    }
+
+    @Test
+    void testEmitterFallbacks() {
+        def config = new CompilerConfiguration()
+        def loader = new GroovyClassLoader()
+        def compileUnit = new CompileUnit(loader, null, config)
+        def module = new ModuleNode(compileUnit)
+        def hidden = new ClassNode('demo.hid.H', Opcodes.ACC_PUBLIC, ClassHelper.OBJECT_TYPE)
+        def concealed = new ClassNode('demo.other.X', Opcodes.ACC_PUBLIC, ClassHelper.OBJECT_TYPE)
+        module.addClass(hidden)
+        module.addClass(concealed)
+        def classNode = new ClassNode('module-info', Opcodes.ACC_ABSTRACT | Opcodes.ACC_INTERFACE, ClassHelper.OBJECT_TYPE)
+        classNode.setModule(module)
+        module.addClass(classNode)
+        compileUnit.addModule(module)
+        def declaration = new ModuleDeclarationNode('demo.emit', false, [
+            new Requires('java.sql', true, true),
+            new Exports('demo.hid', ['java.logging']),
+            new Opens('demo.hid', []),
+            new Uses('java.lang.Runnable'),
+            new Provides('java.lang.Runnable', ['demo.hid.H'])
+        ])
+        declaration.addAnnotation(new AnnotationNode(ClassHelper.DEPRECATED_TYPE))
+        classNode.addAnnotation(declaration.annotations[0])
+        classNode.putNodeMetaData(ModuleDeclarationNode.class, declaration)
+
+        def writer = new ClassWriter(0)
+        def generator = new AsmClassGenerator(null, new GeneratorContext(compileUnit), writer, 'module-info.groovy')
+        def emit = AsmClassGenerator.getDeclaredMethod('emitModuleInfo', ClassNode, ModuleDeclarationNode, int)
+        emit.accessible = true
+        // Below the module class-file minimum: the emitter must raise it to V9.
+        emit.invoke(generator, classNode, declaration, 52)
+        def md = ModuleDescriptor.read(new ByteArrayInputStream(writer.toByteArray()))
+        assert !md.open
+        assert md.name() == 'demo.emit'
+        assert md.requires().find { it.name() == 'java.sql' }.modifiers().containsAll(
+            [ModuleDescriptor.Requires.Modifier.TRANSITIVE, ModuleDescriptor.Requires.Modifier.STATIC])
+        assert md.exports().find { it.source() == 'demo.hid' }.targets() == ['java.logging'] as Set
+        assert md.opens()*.source() == ['demo.hid']
+        // Unresolved service names are still written, with dots folded to slashes by the fallback.
+        assert md.uses().contains('java.lang.Runnable') || md.uses().contains('java/lang/Runnable')
+        assert md.packages().contains('demo.other')
+
+        def skipping = new ClassVisitor(Opcodes.ASM9) {}
+        def skippingGenerator = new AsmClassGenerator(null, new GeneratorContext(compileUnit), skipping, 'module-info.groovy')
+        emit.invoke(skippingGenerator, classNode, declaration, Opcodes.V17)
+    }
+}

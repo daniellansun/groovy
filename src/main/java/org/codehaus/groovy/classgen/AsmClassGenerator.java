@@ -36,6 +36,12 @@ import org.codehaus.groovy.ast.InnerClassNode;
 import org.codehaus.groovy.ast.InterfaceHelperClassNode;
 import org.codehaus.groovy.ast.IntersectionTypeClassNode;
 import org.codehaus.groovy.ast.MethodNode;
+import org.apache.groovy.ast.ModuleDeclarationNode;
+import org.apache.groovy.ast.ModuleDeclarationNode.Exports;
+import org.apache.groovy.ast.ModuleDeclarationNode.Opens;
+import org.apache.groovy.ast.ModuleDeclarationNode.Provides;
+import org.apache.groovy.ast.ModuleDeclarationNode.Requires;
+import org.apache.groovy.ast.ModuleDeclarationNode.Uses;
 import org.codehaus.groovy.ast.ModuleNode;
 import org.codehaus.groovy.ast.PackageNode;
 import org.codehaus.groovy.ast.Parameter;
@@ -110,6 +116,7 @@ import org.codehaus.groovy.classgen.asm.OptimizingStatementWriter;
 import org.codehaus.groovy.classgen.asm.PeepholeOptimizingMethodVisitor;
 import org.codehaus.groovy.classgen.asm.WriterController;
 import org.codehaus.groovy.classgen.asm.WriterControllerFactory;
+import org.codehaus.groovy.control.ModuleImportHelper;
 import org.codehaus.groovy.control.SourceUnit;
 import org.codehaus.groovy.runtime.IntersectionCastSupport;
 import org.codehaus.groovy.runtime.ScriptBytecodeAdapter;
@@ -120,6 +127,7 @@ import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.LimitExceededException;
 import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.ModuleVisitor;
 import org.objectweb.asm.RecordComponentVisitor;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.TypePath;
@@ -128,14 +136,18 @@ import org.objectweb.asm.TypeReference;
 import java.io.PrintWriter;
 import java.io.Writer;
 import java.lang.reflect.Modifier;
+import java.lang.module.FindException;
+import java.lang.module.ModuleFinder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
 import java.util.function.Consumer;
 
@@ -168,6 +180,11 @@ import static org.codehaus.groovy.transform.SealedASTTransformation.sealedSkipAn
 import static org.objectweb.asm.Opcodes.AALOAD;
 import static org.objectweb.asm.Opcodes.AASTORE;
 import static org.objectweb.asm.Opcodes.ACC_ENUM;
+import static org.objectweb.asm.Opcodes.ACC_MANDATED;
+import static org.objectweb.asm.Opcodes.ACC_MODULE;
+import static org.objectweb.asm.Opcodes.ACC_OPEN;
+import static org.objectweb.asm.Opcodes.ACC_STATIC_PHASE;
+import static org.objectweb.asm.Opcodes.ACC_TRANSITIVE;
 import static org.objectweb.asm.Opcodes.ACC_FINAL;
 import static org.objectweb.asm.Opcodes.ACC_PRIVATE;
 import static org.objectweb.asm.Opcodes.ACC_PROTECTED;
@@ -219,6 +236,7 @@ import static org.objectweb.asm.Opcodes.T_FLOAT;
 import static org.objectweb.asm.Opcodes.T_INT;
 import static org.objectweb.asm.Opcodes.T_LONG;
 import static org.objectweb.asm.Opcodes.T_SHORT;
+import static org.objectweb.asm.Opcodes.V9;
 import static org.objectweb.asm.Opcodes.V_PREVIEW;
 import static org.objectweb.asm.TypeReference.CLASS_TYPE_PARAMETER;
 import static org.objectweb.asm.TypeReference.CLASS_TYPE_PARAMETER_BOUND;
@@ -379,6 +397,11 @@ public class AsmClassGenerator extends ClassGenerator {
                     bytecodeVersion = minVersion;
                 }
             }
+            ModuleDeclarationNode moduleDeclaration = ModuleDeclarationNode.of(classNode);
+            if (moduleDeclaration != null) {
+                emitModuleInfo(classNode, moduleDeclaration, bytecodeVersion);
+                return;
+            }
             classVisitor.visit(
                     bytecodeVersion,
                     adjustedClassModifiersForClassWriting(classNode),
@@ -467,6 +490,123 @@ public class AsmClassGenerator extends ClassGenerator {
             GroovyRuntimeException gre = new GroovyRuntimeException(m, e);
             gre.setModule(classNode.getModule());
             throw gre;
+        }
+    }
+
+    /**
+     * Writes a JVM module descriptor ({@code module-info.class}, JVMS §4.7.25).
+     * Directive order follows {@link ModuleVisitor}: packages, requires, exports, opens, uses, provides.
+     * An absent {@code requires java.base} is emitted as {@code ACC_MANDATED}, matching javac.
+     */
+    private void emitModuleInfo(final ClassNode classNode, final ModuleDeclarationNode declaration, int bytecodeVersion) {
+        if ((bytecodeVersion & ~V_PREVIEW) < V9) {
+            bytecodeVersion = V9 | (bytecodeVersion & V_PREVIEW);
+        }
+        classVisitor.visit(bytecodeVersion, ACC_MODULE, "module-info", null, null, null);
+        classVisitor.visitSource(sourceFile, null);
+        ModuleVisitor moduleVisitor = classVisitor.visitModule(
+                declaration.getName(), declaration.isOpen() ? ACC_OPEN : 0, null);
+        if (moduleVisitor == null) {
+            classVisitor.visitEnd();
+            return;
+        }
+        // When ModulePackages is present it must list every package the module
+        // exports, opens, or contains. An open module's opens table must be empty.
+        Set<String> packages = new LinkedHashSet<>();
+        for (Exports exports : declaration.getExports()) {
+            packages.add(exports.getPackageName());
+        }
+        if (!declaration.isOpen()) {
+            for (Opens opens : declaration.getOpens()) {
+                packages.add(opens.getPackageName());
+            }
+        }
+        if (classNode.getCompileUnit() != null) {
+            for (ClassNode cn : classNode.getCompileUnit().getClasses()) {
+                if (ModuleDeclarationNode.of(cn) != null) {
+                    continue;
+                }
+                String pkg = cn.getPackageName();
+                if (pkg != null && !pkg.isEmpty()) {
+                    packages.add(pkg);
+                }
+            }
+        }
+        for (Provides provides : declaration.getProvides()) {
+            for (ClassNode provider : provides.getResolvedProviders()) {
+                String pkg = provider.getPackageName();
+                if (pkg != null && !pkg.isEmpty()) {
+                    packages.add(pkg);
+                }
+            }
+        }
+        for (String pkg : packages) {
+            moduleVisitor.visitPackage(pkg.replace('.', '/'));
+        }
+        boolean sawJavaBase = false;
+        for (Requires requires : declaration.getRequires()) {
+            if ("java.base".equals(requires.getModuleName())) {
+                sawJavaBase = true;
+            }
+            int access = 0;
+            if (requires.isTransitive()) {
+                access |= ACC_TRANSITIVE;
+            }
+            if (requires.isStaticPhase()) {
+                access |= ACC_STATIC_PHASE;
+            }
+            moduleVisitor.visitRequire(requires.getModuleName(), access, moduleVersion(requires.getModuleName()));
+        }
+        if (!sawJavaBase && !"java.base".equals(declaration.getName())) {
+            moduleVisitor.visitRequire("java.base", ACC_MANDATED, moduleVersion("java.base"));
+        }
+        for (Exports exports : declaration.getExports()) {
+            moduleVisitor.visitExport(exports.getPackageName().replace('.', '/'), 0, friendModules(exports.getTargets()));
+        }
+        if (!declaration.isOpen()) {
+            for (Opens opens : declaration.getOpens()) {
+                moduleVisitor.visitOpen(opens.getPackageName().replace('.', '/'), 0, friendModules(opens.getTargets()));
+            }
+        }
+        for (Uses uses : declaration.getUses()) {
+            moduleVisitor.visitUse(internalTypeName(uses.getResolvedType(), uses.getServiceName()));
+        }
+        for (Provides provides : declaration.getProvides()) {
+            String service = internalTypeName(provides.getResolvedService(), provides.getServiceName());
+            List<ClassNode> resolved = provides.getResolvedProviders();
+            String[] providers = new String[provides.getProviderNames().size()];
+            for (int i = 0; i < providers.length; i++) {
+                ClassNode type = i < resolved.size() ? resolved.get(i) : null;
+                providers[i] = internalTypeName(type, provides.getProviderNames().get(i));
+            }
+            moduleVisitor.visitProvide(service, providers);
+        }
+        moduleVisitor.visitEnd();
+        visitAnnotations(classNode, classVisitor);
+        classVisitor.visitEnd();
+    }
+
+    private static String[] friendModules(final List<String> targets) {
+        return targets.isEmpty() ? null : targets.toArray(String[]::new);
+    }
+
+    private static String internalTypeName(final ClassNode type, final String sourceName) {
+        if (type != null) {
+            return BytecodeHelper.getClassInternalName(type);
+        }
+        return sourceName.replace('.', '/');
+    }
+
+    /**
+     * Platform and explicit modules record their version on {@code requires}, as javac does.
+     * A module without a version contributes {@code null}.
+     */
+    private String moduleVersion(final String moduleName) {
+        try {
+            ModuleFinder finder = source != null ? ModuleImportHelper.moduleFinder(source) : ModuleFinder.ofSystem();
+            return finder.find(moduleName).flatMap(ref -> ref.descriptor().rawVersion()).orElse(null);
+        } catch (FindException ignored) {
+            return null;
         }
     }
 
