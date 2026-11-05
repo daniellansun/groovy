@@ -75,15 +75,39 @@ public final class ModuleDeclarationVerifier {
     private ModuleFinder finder = ModuleFinder.of();
     private Set<String> reads = Set.of();
 
+    /**
+     * Replaces the classpath half of module resolution. Tests use this to raise
+     * {@link FindException} with a chosen message. Always cleared by the test.
+     */
+    static volatile ModuleFinder classpathFinderOverride;
+
+    /**
+     * Replaces the finder consulted when checking whether a read module still
+     * exports a package. Tests use this to drop a module that resolution already accepted.
+     */
+    static volatile ModuleFinder accessibilityFinderOverride;
+
     private ModuleDeclarationVerifier(final SourceUnit source, final ClassNode classNode, final ModuleDeclarationNode declaration) {
         this.source = source;
         this.declaration = declaration;
         this.moduleNode = classNode.getModule();
         CompileUnit unit = moduleNode != null ? moduleNode.getUnit() : null;
-        if (unit == null && source != null && source.getAST() != null) {
+        if (unit == null && source.getAST() != null) {
             unit = source.getAST().getUnit();
         }
         this.compileUnit = unit;
+    }
+
+    /**
+     * Version string recorded on a {@code requires} edge, or {@code null} when the
+     * module has none or the finder cannot be read.
+     */
+    public static String readModuleVersion(final ModuleFinder finder, final String moduleName) {
+        try {
+            return finder.find(moduleName).flatMap(ref -> ref.descriptor().rawVersion()).orElse(null);
+        } catch (FindException ignored) {
+            return null;
+        }
     }
 
     /**
@@ -120,7 +144,7 @@ public final class ModuleDeclarationVerifier {
                 continue;
             }
             String pkg = cn.getPackageName();
-            if (pkg != null && !pkg.isEmpty()) {
+            if (pkg != null) {
                 modulePackages.add(pkg);
             }
         }
@@ -235,9 +259,14 @@ public final class ModuleDeclarationVerifier {
             };
             // Platform modules come from the boot configuration. Putting the system
             // finder in front of that parent makes every automatic module read them twice.
-            ModuleFinder before = dedupe(ModuleFinder.compose(compiling, ModuleImportHelper.classpathModuleFinder(source)));
+            ModuleFinder classpath = classpathFinderOverride != null
+                    ? classpathFinderOverride
+                    : ModuleImportHelper.classpathModuleFinder(source);
+            ModuleFinder before = dedupe(ModuleFinder.compose(compiling, classpath));
             // Descriptor lookup still needs the platform modules (exports of java.base, …).
-            finder = ModuleFinder.compose(before, ModuleFinder.ofSystem());
+            finder = accessibilityFinderOverride != null
+                    ? accessibilityFinderOverride
+                    : ModuleFinder.compose(before, ModuleFinder.ofSystem());
             Configuration configuration = Configuration.resolveAndBind(
                     before, List.of(ModuleLayer.boot().configuration()), ModuleFinder.of(), Set.of(moduleName));
             Set<String> readable = new LinkedHashSet<>();
@@ -274,7 +303,7 @@ public final class ModuleDeclarationVerifier {
             if (!resolved.isResolved() && !resolved.isPrimaryClassNode() && resolved.getCompileUnit() == null) {
                 continue;
             }
-            if (!isAccessible(resolved, inThisModule(resolved))) {
+            if (!isAccessible(resolved)) {
                 error("annotation @" + resolved.getName() + " is not accessible in module " + declaration.getName(), annotation);
             }
         }
@@ -294,7 +323,7 @@ public final class ModuleDeclarationVerifier {
             }
             if (resolved.type.isEnum()) {
                 error("uses directive specifies an enum class " + binary, uses);
-            } else if (!isAccessible(resolved.type, resolved.inThisModule)) {
+            } else if (!isAccessible(resolved.type)) {
                 error("service " + binary + " is not accessible in module " + declaration.getName(), uses);
             }
         }
@@ -314,7 +343,7 @@ public final class ModuleDeclarationVerifier {
             }
             if (service.type.isEnum()) {
                 error("provides directive specifies an enum class " + serviceName, provides);
-            } else if (!isAccessible(service.type, service.inThisModule)) {
+            } else if (!isAccessible(service.type)) {
                 error("service " + serviceName + " is not accessible in module " + declaration.getName(), provides);
             }
             Set<String> providersSeen = new HashSet<>();
@@ -351,9 +380,9 @@ public final class ModuleDeclarationVerifier {
         MethodNode providerMethod = findProviderMethod(type);
         if (providerMethod != null) {
             ClassNode returnType = providerMethod.getReturnType();
-            if (returnType == null || !implementsInterfaceOrSubclassOf(returnType, service)) {
+            if (!implementsInterfaceOrSubclassOf(returnType, service)) {
                 error("provider method of " + name + " must return a subtype of " + service.getName(), provides);
-            } else if (!isAccessible(returnType, inThisModule(returnType))) {
+            } else if (!isAccessible(returnType)) {
                 error("return type " + returnType.getName() + " of provider method is not accessible in module " + declaration.getName(), provides);
             }
             return;
@@ -421,15 +450,15 @@ public final class ModuleDeclarationVerifier {
      * another module is accessible when that module is read and exports the
      * type's package to the current module (JLS §6.6 / §7.7).
      */
-    private boolean isAccessible(final ClassNode type, final boolean declaredHere) {
-        if (type == null || !Modifier.isPublic(type.getModifiers())) {
+    private boolean isAccessible(final ClassNode type) {
+        if (!Modifier.isPublic(type.getModifiers())) {
             return false;
         }
-        if (declaredHere || inThisModule(type)) {
+        if (inThisModule(type)) {
             return true;
         }
         String pkg = type.getPackageName();
-        if (pkg == null || pkg.isEmpty()) {
+        if (pkg == null) {
             return false;
         }
         String moduleName = declaration.getName();
@@ -476,7 +505,7 @@ public final class ModuleDeclarationVerifier {
             return sourceName;
         }
         ImportNode single = moduleNode.getImport(sourceName);
-        if (single != null && single.getType() != null) {
+        if (single != null) {
             return single.getType().getName();
         }
         List<String> candidates = new ArrayList<>();

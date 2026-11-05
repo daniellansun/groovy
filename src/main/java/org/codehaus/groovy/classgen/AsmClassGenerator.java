@@ -42,6 +42,7 @@ import org.apache.groovy.ast.ModuleDeclarationNode.Opens;
 import org.apache.groovy.ast.ModuleDeclarationNode.Provides;
 import org.apache.groovy.ast.ModuleDeclarationNode.Requires;
 import org.apache.groovy.ast.ModuleDeclarationNode.Uses;
+import org.apache.groovy.classgen.ModuleDeclarationVerifier;
 import org.codehaus.groovy.ast.ModuleNode;
 import org.codehaus.groovy.ast.PackageNode;
 import org.codehaus.groovy.ast.Parameter;
@@ -136,7 +137,6 @@ import org.objectweb.asm.TypeReference;
 import java.io.PrintWriter;
 import java.io.Writer;
 import java.lang.reflect.Modifier;
-import java.lang.module.FindException;
 import java.lang.module.ModuleFinder;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -527,7 +527,7 @@ public class AsmClassGenerator extends ClassGenerator {
                     continue;
                 }
                 String pkg = cn.getPackageName();
-                if (pkg != null && !pkg.isEmpty()) {
+                if (pkg != null) {
                     packages.add(pkg);
                 }
             }
@@ -535,7 +535,7 @@ public class AsmClassGenerator extends ClassGenerator {
         for (Provides provides : declaration.getProvides()) {
             for (ClassNode provider : provides.getResolvedProviders()) {
                 String pkg = provider.getPackageName();
-                if (pkg != null && !pkg.isEmpty()) {
+                if (pkg != null) {
                     packages.add(pkg);
                 }
             }
@@ -602,12 +602,8 @@ public class AsmClassGenerator extends ClassGenerator {
      * A module without a version contributes {@code null}.
      */
     private String moduleVersion(final String moduleName) {
-        try {
-            ModuleFinder finder = source != null ? ModuleImportHelper.moduleFinder(source) : ModuleFinder.ofSystem();
-            return finder.find(moduleName).flatMap(ref -> ref.descriptor().rawVersion()).orElse(null);
-        } catch (FindException ignored) {
-            return null;
-        }
+        ModuleFinder lookup = source != null ? ModuleImportHelper.moduleFinder(source) : ModuleFinder.ofSystem();
+        return ModuleDeclarationVerifier.readModuleVersion(lookup, moduleName);
     }
 
     private void visitRecordComponents(final ClassNode classNode) {

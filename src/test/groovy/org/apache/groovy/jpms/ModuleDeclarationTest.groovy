@@ -260,10 +260,23 @@ final class ModuleDeclarationTest {
             'module-info.groovy': '''
                 module demo.needsauto {
                     requires demo.auto;
+                    requires java.sql;
                     uses demo.auto.AutoType;
+                    uses java.sql.Driver;
                 }
             '''
         ])
+
+        // Driver's package is not in the automatic module, and java.sql is not read.
+        def missed = fail(dir('auto-miss'), autoJar, [
+            'module-info.groovy': '''
+                module demo.automiss {
+                    requires demo.auto;
+                    uses java.sql.Driver;
+                }
+            '''
+        ])
+        assert missed.contains('not accessible')
 
         // A directory of class files is not a named or automatic module (unnamed module).
         // A named module cannot requires it.
@@ -441,7 +454,7 @@ final class ModuleDeclarationTest {
                 import java.lang.Runnable
                 module demo.prov {
                     exports demo.prov;
-                    provides Runnable with demo.prov.Top, demo.prov.Outer.Inner, demo.prov.Factory, demo.prov.E;
+                    provides Runnable with demo.prov.Top, demo.prov.Outer.Inner, demo.prov.Factory, demo.prov.E, demo.prov.LooksLikeProvider, demo.prov.OnlyPrivate, demo.prov.Outer2.Mid.Deep;
                 }
             ''',
             'Types.groovy': '''
@@ -452,6 +465,20 @@ final class ModuleDeclarationTest {
                 }
                 class Factory {
                     static Runnable provider() { new Top() }
+                }
+                class LooksLikeProvider implements Runnable {
+                    void run() {}
+                    Runnable provider() { null }
+                    static Runnable provider(String ignored) { null }
+                }
+                class OnlyPrivate implements Runnable {
+                    void run() {}
+                    private static Runnable provider() { null }
+                }
+                class Outer2 {
+                    static class Mid {
+                        static class Deep implements Runnable { void run() {} }
+                    }
                 }
                 enum E implements Runnable {
                     INST
@@ -483,6 +510,13 @@ final class ModuleDeclarationTest {
         assert fail(dir('primordial'), ['module-info.groovy': '''
             module java.base { requires java.sql; }
         ''']).contains('not allowed in module java.base')
+
+        // No requires clauses: java.base is not given an implicit requires edge.
+        def primordial = compile(dir('primordial-empty'), ['module-info.groovy': '''
+            module java.base { }
+        '''])
+        assert descriptor(primordial).name() == 'java.base'
+        assert descriptor(primordial).requires().empty
 
         assert fail(dir('missing'), ['module-info.groovy': '''
             module demo.missing { requires no.such.module; }

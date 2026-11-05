@@ -35,18 +35,28 @@ import org.codehaus.groovy.classgen.GeneratorContext
 import org.codehaus.groovy.control.CompilerConfiguration
 import org.codehaus.groovy.control.ErrorCollector
 import org.codehaus.groovy.control.SourceUnit
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import org.objectweb.asm.ClassVisitor
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.Opcodes
 
+import java.lang.module.FindException
 import java.lang.module.ModuleDescriptor
+import java.lang.module.ModuleFinder
+import java.lang.module.ModuleReference
 
 /**
  * Branches that the pipeline does not reach on its own: guards, the module reader
  * required by {@code ModuleReference}, and emitter fallbacks.
  */
 final class ModuleDeclarationCoverageTest {
+
+    @AfterEach
+    void clearFinderOverrides() {
+        ModuleDeclarationVerifier.classpathFinderOverride = null
+        ModuleDeclarationVerifier.accessibilityFinderOverride = null
+    }
 
     @Test
     void testSourceNameAndMissingDeclaration() {
@@ -93,12 +103,35 @@ final class ModuleDeclarationCoverageTest {
         source.AST.starImports << new ImportNode(ClassHelper.OBJECT_TYPE)
         source.AST.starImports << new ImportNode('')
         // Package name without a trailing dot, so the normalizer branch runs.
+        // A second copy of the same package hits the "already a candidate" side.
+        source.AST.starImports << new ImportNode('java.util')
         source.AST.starImports << new ImportNode('java.util')
         assert source.AST.unit == null
         ModuleDeclarationVerifier.check(source, moduleInfo)
         def messages = (0..<source.errorCollector.errorCount).collect { source.errorCollector.getSyntaxError(it)?.message }.join('\n')
         assert messages.contains('not accessible')
         assert declaration.uses.find { it.serviceName == 'java.lang.Runnable' }.resolvedType.name == 'java.lang.Runnable'
+    }
+
+    @Test
+    void testSystemClassLoaderWhenSourceHasNone() {
+        def config = new CompilerConfiguration()
+        def source = new SourceUnit('module-info.groovy',
+            'module demo.sys { uses java.lang.Runnable; }',
+            config, new GroovyClassLoader(), new ErrorCollector(config))
+        source.parse()
+        source.completePhase()
+        source.convert()
+        def loader = org.codehaus.groovy.control.ProcessingUnit.getDeclaredField('classLoader')
+        loader.accessible = true
+        loader.set(source, null)
+        assert source.classLoader == null
+        assert source.AST.unit == null
+        def moduleInfo = source.AST.classes.find { it.name == 'module-info' }
+        ModuleDeclarationVerifier.check(source, moduleInfo)
+        def declaration = ModuleDeclarationNode.of(moduleInfo)
+        assert declaration.uses[0].resolvedType.name == 'java.lang.Runnable'
+        assert source.errorCollector.errorCount == 0
     }
 
     @Test
@@ -156,5 +189,143 @@ final class ModuleDeclarationCoverageTest {
         def skipping = new ClassVisitor(Opcodes.ASM9) {}
         def skippingGenerator = new AsmClassGenerator(null, new GeneratorContext(compileUnit), skipping, 'module-info.groovy')
         emit.invoke(skippingGenerator, classNode, declaration, Opcodes.V17)
+
+        // A default-package class and provider are skipped (unnamed packages cannot appear in ModulePackages).
+        def looseType = new ClassNode('Loose', Opcodes.ACC_PUBLIC, ClassHelper.OBJECT_TYPE)
+        module.addClass(looseType)
+        declaration.provides[0].resolvedProviders = [looseType, hidden]
+        def unnamed = new ClassWriter(0)
+        def unnamedGenerator = new AsmClassGenerator(null, new GeneratorContext(compileUnit), unnamed, 'module-info.groovy')
+        emit.invoke(unnamedGenerator, classNode, declaration, Opcodes.V17)
+
+        // Module java.base has no implicit requires edge, and a class with no compile unit skips package scanning.
+        def baseDecl = new ModuleDeclarationNode('java.base', false, [])
+        def baseNode = new ClassNode('module-info', Opcodes.ACC_ABSTRACT | Opcodes.ACC_INTERFACE, ClassHelper.OBJECT_TYPE)
+        def baseWriter = new ClassWriter(0)
+        def baseGenerator = new AsmClassGenerator(null, new GeneratorContext(compileUnit), baseWriter, 'module-info.groovy')
+        emit.invoke(baseGenerator, baseNode, baseDecl, Opcodes.V17)
+        def base = ModuleDescriptor.read(new ByteArrayInputStream(baseWriter.toByteArray()))
+        assert base.name() == 'java.base'
+        assert base.requires().empty
+    }
+
+    @Test
+    void testNullModuleAndUnparsedSource() {
+        def parsed = parsed('module demo.nullmod { uses Runnable; }')
+        def classNode = parsed.AST.classes.find { it.name == 'module-info' }
+        classNode.setModule(null)
+        ModuleDeclarationVerifier.check(parsed, classNode)
+        assert messages(parsed).contains('unable to resolve class Runnable')
+
+        def config = new CompilerConfiguration()
+        def loader = new GroovyClassLoader()
+        def unparsed = new SourceUnit('module-info.groovy', 'module demo.x {}', config, loader, new ErrorCollector(config))
+        def info = new ClassNode('module-info', Opcodes.ACC_ABSTRACT | Opcodes.ACC_INTERFACE, ClassHelper.OBJECT_TYPE)
+        def module = new ModuleNode(unparsed)
+        info.setModule(module)
+        def declaration = new ModuleDeclarationNode('demo.x', false, [
+            new ModuleDeclarationNode.Requires('java.base', false, false)
+        ])
+        def hosted = ClassHelper.makeWithoutCaching('not.yet.Resolved')
+        hosted.putNodeMetaData(ModuleNode, new ModuleNode(new CompileUnit(loader, null, config)))
+        declaration.addAnnotation(new AnnotationNode(hosted))
+        info.putNodeMetaData(ModuleDeclarationNode.class, declaration)
+        assert unparsed.AST == null
+        ModuleDeclarationVerifier.check(unparsed, info)
+        assert messages(unparsed).contains('annotation @not.yet.Resolved is not accessible')
+    }
+
+    @Test
+    void testResolvedModuleNoLongerOpenable() {
+        ModuleDeclarationVerifier.accessibilityFinderOverride = new ModuleFinder() {
+            @Override
+            Optional<ModuleReference> find(String name) {
+                Optional.empty()
+            }
+
+            @Override
+            Set<ModuleReference> findAll() {
+                Set.of()
+            }
+        }
+        def parsed = parsed('module demo.gap { uses java.lang.Runnable; }')
+        ModuleDeclarationVerifier.check(parsed, parsed.AST.classes.find { it.name == 'module-info' })
+        assert messages(parsed).contains('not accessible')
+    }
+
+    @Test
+    void testResolutionFailureWithoutMessage() {
+        assertResolutionFailure(' ', 'demo.blank', 'missing.blank')
+        assertResolutionFailure(null, 'demo.nilmsg', 'missing.nil')
+    }
+
+    @Test
+    void testReadModuleVersion() {
+        assert ModuleDeclarationVerifier.readModuleVersion(ModuleFinder.ofSystem(), 'java.base')
+        assert ModuleDeclarationVerifier.readModuleVersion(ModuleFinder.ofSystem(), 'no.such.module') == null
+        def descriptor = ModuleDescriptor.newModule('demo.nover').build()
+        def reference = new ModuleDeclarationVerifier.CompilingModuleReference(descriptor)
+        def finder = new ModuleFinder() {
+            @Override
+            Optional<ModuleReference> find(String name) {
+                'demo.nover' == name ? Optional.of(reference) : Optional.empty()
+            }
+
+            @Override
+            Set<ModuleReference> findAll() {
+                Set.of(reference)
+            }
+        }
+        assert ModuleDeclarationVerifier.readModuleVersion(finder, 'demo.nover') == null
+        def failing = new ModuleFinder() {
+            @Override
+            Optional<ModuleReference> find(String name) {
+                throw new FindException('boom')
+            }
+
+            @Override
+            Set<ModuleReference> findAll() {
+                Set.of()
+            }
+        }
+        assert ModuleDeclarationVerifier.readModuleVersion(failing, 'java.base') == null
+    }
+
+    private static void assertResolutionFailure(String failureMessage, String moduleName, String missing) {
+        ModuleDeclarationVerifier.classpathFinderOverride = new ModuleFinder() {
+            @Override
+            Optional<ModuleReference> find(String name) {
+                if (missing == name) {
+                    throw new FindException(failureMessage)
+                }
+                Optional.empty()
+            }
+
+            @Override
+            Set<ModuleReference> findAll() {
+                Set.of()
+            }
+        }
+        try {
+            def parsed = parsed("module ${moduleName} { requires ${missing}; }")
+            ModuleDeclarationVerifier.check(parsed, parsed.AST.classes.find { it.name == 'module-info' })
+            assert messages(parsed).contains('module resolution failed for ' + moduleName)
+        } finally {
+            ModuleDeclarationVerifier.classpathFinderOverride = null
+        }
+    }
+
+    private static SourceUnit parsed(String text) {
+        def config = new CompilerConfiguration()
+        def loader = new GroovyClassLoader()
+        def source = new SourceUnit('module-info.groovy', text, config, loader, new ErrorCollector(config))
+        source.parse()
+        source.completePhase()
+        source.convert()
+        source
+    }
+
+    private static String messages(SourceUnit source) {
+        (0..<source.errorCollector.errorCount).collect { source.errorCollector.getSyntaxError(it)?.message }.join('\n')
     }
 }
