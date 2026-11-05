@@ -90,8 +90,9 @@ public final class Dialects {
             case "postgresql":
                 return new PostgresDialect();
             case "mysql":
+                return new MySqlDialect("mysql");
             case "mariadb":
-                return new MySqlDialect();
+                return new MySqlDialect("mariadb");
             case "sqlite":
                 return new SqliteDialect();
             default:
@@ -137,9 +138,15 @@ public final class Dialects {
     }
 
     private static final class MySqlDialect implements Dialect {
+        private final String dialectName;
+
+        private MySqlDialect(String dialectName) {
+            this.dialectName = dialectName;
+        }
+
         @Override
         public String name() {
-            return "mysql";
+            return dialectName;
         }
 
         @Override
@@ -201,6 +208,16 @@ public final class Dialects {
             out.expr(left);
             out.text(negated ? " IS NOT " : " IS ");
             out.expr(right);
+        }
+
+        @Override
+        public String integerTypeName() {
+            return "INTEGER";
+        }
+
+        @Override
+        public boolean countDistinctOver() {
+            return false;
         }
 
         @Override
