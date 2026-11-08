@@ -29,9 +29,14 @@ import tools.jackson.core.JacksonException;
 import java.io.IOException;
 import java.io.StringReader;
 import java.io.Writer;
+import java.time.temporal.TemporalAccessor;
+import java.time.temporal.TemporalAmount;
 import java.util.Collection;
+import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  *  A builder for creating TOML payloads.
@@ -40,6 +45,10 @@ import java.util.Map;
  */
 @Incubating
 public class TomlBuilder extends GroovyObjectSupport implements Writable {
+    // Carrier key, removed before the text is returned. Must stay a bare key so
+    // Jackson writes "v = ..." and dropping it leaves the historical " = ..." .
+    private static final String ROOT_VALUE_KEY = "v";
+
     private final JsonBuilder jsonBuilder;
 
     /**
@@ -59,10 +68,46 @@ public class TomlBuilder extends GroovyObjectSupport implements Writable {
      */
     public static String toToml(Object object) {
         try {
+            if (needsEmptyKey(object)) {
+                return writeWithEmptyKey(object);
+            }
             return TomlSlurper.mapper().writeValueAsString(object);
         } catch (JacksonException e) {
             throw new TomlRuntimeException(e);
         }
+    }
+
+    // Root arrays and scalars are rejected by Jackson 3.3; an empty table is
+    // written as an empty document. Both used to be an empty key.
+    private static boolean needsEmptyKey(Object value) {
+        if (value == null || value instanceof Collection) {
+            return true;
+        }
+        if (value instanceof Map<?, ?> map) {
+            return map.isEmpty();
+        }
+        if (value.getClass().isArray()) {
+            return true;
+        }
+        return value instanceof CharSequence
+                || value instanceof Number
+                || value instanceof Boolean
+                || value instanceof Character
+                || value instanceof Enum
+                || value instanceof Date
+                || value instanceof TemporalAccessor
+                || value instanceof TemporalAmount
+                || value instanceof UUID;
+    }
+
+    private static String writeWithEmptyKey(Object value) throws JacksonException {
+        Map<String, Object> wrapped = new LinkedHashMap<>();
+        wrapped.put(ROOT_VALUE_KEY, value);
+        String written = TomlSlurper.mapper().writeValueAsString(wrapped);
+        if (!written.startsWith(ROOT_VALUE_KEY + " = ")) {
+            throw new TomlRuntimeException("Cannot write a TOML value at the document root");
+        }
+        return written.substring(ROOT_VALUE_KEY.length());
     }
 
     /**
