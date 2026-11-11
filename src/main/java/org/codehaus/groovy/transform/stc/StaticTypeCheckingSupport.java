@@ -2335,7 +2335,7 @@ public abstract class StaticTypeCheckingSupport {
 
     private static void storeGenericsConnection(final Map<GenericsTypeName, GenericsType> connections, final String placeholderName, final GenericsType gt) {
       //connections.merge(new GenericsTypeName(placeholderName), gt, (gt1, gt2) -> getCombinedGenericsType(gt1, gt2));
-        connections.put(new GenericsTypeName(placeholderName), gt);
+        connections.put(new GenericsTypeName(placeholderName), GenericsUtils.asReferenceTypeArgument(gt));
     }
 
     /**
@@ -2508,7 +2508,7 @@ public abstract class StaticTypeCheckingSupport {
         }
         if (!type.isGenericsPlaceHolder()) { // convert Type<T> to Type<...>
             ClassNode cn = type.getPlainNodeReference();
-            cn.setGenericsTypes(gt);
+            cn.setGenericsTypes(GenericsUtils.legalTypeArguments(type, gt));
             return cn;
         }
 
