@@ -1010,6 +1010,9 @@ class QueryableCollection<T> implements Queryable<T>, Serializable {
 
         @Override
         public boolean tryAdvance(Consumer<? super T> action) {
+            if (serveReplayed(action)) {
+                return true;
+            }
             writeLock.lock();
             try {
                 if (cursor < replay.size()) {
@@ -1022,18 +1025,38 @@ class QueryableCollection<T> implements Queryable<T>, Serializable {
                 boolean[] advanced = {false};
                 boolean more = upstream.tryAdvance(item -> {
                     replay.add(item);
-                    action.accept(item);
                     advanced[0] = true;
                 });
                 if (!more || !advanced[0]) {
                     finishOneShot();
                     return false;
                 }
-                cursor++;
+                action.accept(replay.get(cursor++));
                 return true;
             } finally {
                 writeLock.unlock();
             }
+        }
+
+        /**
+         * Serves an element already in {@link #replay}. The read lock covers
+         * the buffer only; the callback runs after it is released so a reader
+         * does not take the write lock, and does not hold the read lock across
+         * a callback that may need the write lock.
+         */
+        private boolean serveReplayed(Consumer<? super T> action) {
+            T item;
+            readLock.lock();
+            try {
+                if (cursor >= replay.size()) {
+                    return false;
+                }
+                item = replay.get(cursor++);
+            } finally {
+                readLock.unlock();
+            }
+            action.accept(item);
+            return true;
         }
 
         @Override
