@@ -226,9 +226,9 @@ public class AstBuilder extends GroovyParserBaseVisitor<Object> {
         this.parser.setErrorHandler(DescriptiveErrorStrategy.create(charStream, this.errorRecovery));
         // JLS 7.3: only module-info is a modular compilation unit. Elsewhere
         // `module` / `requires` / `exports` / … stay ordinary identifiers.
-        if (ModuleInfoNode.isModuleInfoSource(sourceUnit.getName())) {
-            this.parser.setModuleDescriptor(true);
-        }
+        // Parsed via a separate start rule so regular-file diagnostics keep
+        // their local unexpected-token span.
+        this.moduleDescriptor = ModuleInfoNode.isModuleInfoSource(sourceUnit.getName());
 
         this.groovydocManager = new GroovydocManager(groovydocEnabled, runtimeGroovydocEnabled);
         this.tryWithResourcesASTTransformation = new TryWithResourcesASTTransformation(this);
@@ -294,7 +294,7 @@ public class AstBuilder extends GroovyParserBaseVisitor<Object> {
             this.addErrorListeners();
         }
 
-        return parser.compilationUnit();
+        return this.moduleDescriptor ? parser.moduleCompilationUnit() : parser.compilationUnit();
     }
 
     private CompilationFailedException convertException(final Throwable t) {
@@ -372,14 +372,6 @@ public class AstBuilder extends GroovyParserBaseVisitor<Object> {
      */
     @Override
     public ModuleNode visitCompilationUnit(final CompilationUnitContext ctx) {
-        if (ctx.modularCompilationUnit() != null) {
-            this.visitModularCompilationUnit(ctx.modularCompilationUnit());
-            if (this.numberFormatError != null) {
-                throw createParsingFailedException(this.numberFormatError.getV2().getMessage(), this.numberFormatError.getV1());
-            }
-            return this.moduleNode;
-        }
-
         this.visit(ctx.packageDeclaration());
 
         for (ASTNode node : this.visitScriptStatements(ctx.scriptStatements())) {
@@ -530,6 +522,15 @@ public class AstBuilder extends GroovyParserBaseVisitor<Object> {
         }
 
         return configureAST(importNode, ctx);
+    }
+
+    @Override
+    public ModuleNode visitModuleCompilationUnit(final ModuleCompilationUnitContext ctx) {
+        this.visitModularCompilationUnit(ctx.modularCompilationUnit());
+        if (this.numberFormatError != null) {
+            throw createParsingFailedException(this.numberFormatError.getV2().getMessage(), this.numberFormatError.getV1());
+        }
+        return this.moduleNode;
     }
 
     @Override
@@ -7319,6 +7320,8 @@ public class AstBuilder extends GroovyParserBaseVisitor<Object> {
     private final TryWithResourcesASTTransformation tryWithResourcesASTTransformation;
     /** {@code true} when {@link CompilerConfiguration#ERROR_RECOVERY} is enabled. */
     private final boolean errorRecovery;
+    /** {@code true} when {@code sourceUnit} is a JPMS module descriptor. */
+    private final boolean moduleDescriptor;
 
     private final List<ClassNode> classNodeList = new ArrayList<>();
     private final Deque<ClassNode> classNodeStack = new ArrayDeque<>();
