@@ -20,6 +20,8 @@ package org.apache.groovy.ginq.provider.sql
 
 import groovy.sql.Sql
 import org.junit.jupiter.api.AfterEach
+
+import java.util.Locale
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
@@ -246,6 +248,81 @@ class GinqSqlMixedOuterJoinTest {
         assert missing != null
         assert 2 == missing[1]
         assert rows.any { it[0] == 'Alice' && it[1] == 1 }
+    }
+
+    @Test
+    void testCompleteFullJoinIncludesBothUnmatchedSides() {
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def rows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: captured) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            select e.name as en, d.name as dn
+        }.toList()
+        def upper = captured.sqlText.toUpperCase(Locale.ROOT)
+        assert !upper.contains('FULL OUTER JOIN')
+        assert !upper.contains('FULL JOIN')
+        assert upper.contains('UNION ALL')
+        assert rows.any { it.en == 'Dave' && it.dn == null }
+        assert rows.any { it.en == null && it.dn == 'Empty' }
+        assert rows.any { it.en == null && it.dn == 'Vacant' }
+        assert rows.any { it.en == 'Alice' && it.dn == 'Dev' }
+        assert 8 == rows.size()
+    }
+
+    @Test
+    void testCompleteFullJoinChainOrderAndLimit() {
+        db.execute('create table aa (id integer)')
+        db.execute('create table bb (id integer)')
+        db.execute('create table cc (id integer)')
+        db.execute('insert into aa (id) values (1), (2)')
+        db.execute('insert into bb (id) values (1), (3)')
+        db.execute('insert into cc (id) values (3), (4)')
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def limited = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: captured) {
+            from a in 'aa'
+            fulljoin b in 'bb' on a.id == b.id
+            fulljoin c in 'cc' on b.id == c.id
+            orderby a.id, b.id, c.id
+            limit 3
+            select a.id as aId, b.id as bId, c.id as cId
+        }.toList()
+        def upper = captured.sqlText.toUpperCase(Locale.ROOT)
+        assert !upper.contains('FULL OUTER JOIN')
+        assert !upper.contains('FULL JOIN')
+        assert upper.contains('UNION ALL')
+        assert upper.contains('ORDER BY')
+        assert upper.contains('FETCH')
+        assert !upper.contains('ORDER BY A.ID')
+        assert captured.sqlText.indexOf('UNION ALL') < upper.indexOf('ORDER BY')
+        assert [[1, 1, null], [2, null, null], [null, 3, 3]] == limited.collect { [it.aId, it.bId, it.cId] }
+
+        def all = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: db) {
+            from a in 'aa'
+            fulljoin b in 'bb' on a.id == b.id
+            fulljoin c in 'cc' on b.id == c.id
+            select a.id as aId, b.id as bId, c.id as cId
+        }.toList()
+        assert 4 == all.size()
+        assert all.any { it.aId == null && it.bId == null && it.cId == 4 }
+    }
+
+    @Test
+    void testCompleteFullJoinWhereStaysInSql() {
+        def floor = 4000
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def rows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: captured) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            where e.salary > floor
+            select e.name as en, d.name as dn
+        }.toList()
+        assert captured.sqlText.toUpperCase(Locale.ROOT).contains('UNION ALL')
+        assert !captured.sqlText.toUpperCase(Locale.ROOT).contains('FULL JOIN')
+        assert !captured.sqlText.toUpperCase(Locale.ROOT).contains('FULL OUTER JOIN')
+        assert [4000] == captured.params
+        assert ['Alice', 'Eve', 'Frank'] as Set == rows.collect { it.en } as Set
+        assert rows.every { it.dn != null }
+        assert 3 == rows.size()
     }
 
     @Test

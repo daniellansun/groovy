@@ -1246,11 +1246,13 @@ makes that column null when the side has no row, and the name is chosen so it do
 with a real column. A row that exists but whose columns are all null therefore stays a non-null
 row, while `d == null` is true when the join did not match. The in-memory tail pairs those
 already aligned rows by index, so a null alias stays null for a later `where`, `select`,
-`orderby`, `groupby` or join. ANSI, PostgreSQL and SQLite spell a pushed full join as
-`FULL OUTER JOIN`. H2, MySQL and MariaDB have no such join: each full join is a left
-join union the right-join rows for which the whole left side is absent, and that
-union is a derived table the next join reads. `orderby` and `limit` apply to the
-combined rows. A `where` clause is kept together: if any part of it cannot be translated, the whole
+`orderby`, `groupby` or join. ANSI, PostgreSQL and SQLite spell a full join as
+`FULL OUTER JOIN`. H2, MySQL and MariaDB have no such join, whether or not the rest of
+the query translates: each full join is a left join union the right-join rows for which
+the whole left side is absent, and that union is a derived table the next join reads.
+A query that stays entirely in SQL keeps the author's `select` list; the presence
+marker stays inside the union. `orderby` and `limit` apply to the combined rows, by
+the names of those output columns. A `where` clause is kept together: if any part of it cannot be translated, the whole
 predicate runs in memory and only the preceding `from`/`join` clauses are pushed.
 `groupby` and its `having` clause are not pushed when a later clause falls back to memory, so
 grouped results keep collection-provider semantics. `orderby` and `limit` are pushed only when

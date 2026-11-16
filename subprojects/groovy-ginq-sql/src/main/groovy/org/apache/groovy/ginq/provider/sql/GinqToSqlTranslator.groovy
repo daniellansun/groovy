@@ -989,6 +989,9 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
                 return null
             }
             if (full != null) {
+                if (!capabilities.supportsFullOuterJoin()) {
+                    full = MixedSourceLayout.layoutComplete(full)
+                }
                 return MixedPlan.complete(full)
             }
             return null

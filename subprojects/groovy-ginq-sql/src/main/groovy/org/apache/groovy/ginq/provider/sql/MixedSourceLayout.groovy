@@ -20,6 +20,9 @@ package org.apache.groovy.ginq.provider.sql
 
 import groovy.transform.CompileStatic
 import groovy.transform.PackageScope
+
+import java.util.LinkedHashMap
+import java.util.LinkedHashSet
 import org.apache.groovy.ginq.provider.sql.ir.SqlBinary
 import org.apache.groovy.ginq.provider.sql.ir.SqlCaseWhen
 import org.apache.groovy.ginq.provider.sql.ir.SqlCast
@@ -60,9 +63,12 @@ class MixedSourceLayout {
     private static final String SRC = '__ginq_src'
 
     private final List<String> aliasNames
+    private final boolean userProjections
+    private final Map<String, LinkedHashSet<String>> usedColumns = new LinkedHashMap<>()
 
-    private MixedSourceLayout(List<String> aliasNames) {
+    private MixedSourceLayout(List<String> aliasNames, boolean userProjections) {
         this.aliasNames = aliasNames
+        this.userProjections = userProjections
     }
 
     /**
@@ -72,7 +78,38 @@ class MixedSourceLayout {
      * and that union is the left input of the following join.
      */
     static SqlQueryNode layout(SqlQuery query, List<String> aliasNames, boolean emulateFull) {
-        return new MixedSourceLayout(aliasNames).apply(query, emulateFull)
+        return new MixedSourceLayout(aliasNames, false).apply(query, emulateFull)
+    }
+
+    /**
+     * Rewrites a fully translated query so a dialect without {@code FULL OUTER JOIN}
+     * still executes it. The outermost select list stays the user's projections;
+     * presence columns exist only inside the emulated unions.
+     */
+    static SqlQueryNode layoutComplete(SqlQueryNode node) {
+        if (node instanceof SqlSetQuery) {
+            SqlSetQuery set = (SqlSetQuery) node
+            SqlQueryNode left = layoutComplete(set.left)
+            SqlQuery right = (SqlQuery) layoutComplete(set.right)
+            if (left === set.left && right === set.right) {
+                return set
+            }
+            SqlSetQuery copy = new SqlSetQuery(left, set.op, right)
+            copy.orderBy.addAll(set.orderBy)
+            copy.offset = set.offset
+            copy.fetch = set.fetch
+            return copy
+        }
+        SqlQuery query = (SqlQuery) node
+        rewriteNestedSources(query)
+        if (!query.joins.any { SqlJoin join -> join.type == SqlJoin.Type.FULL }) {
+            return query
+        }
+        List<String> names = [query.from.alias]
+        for (SqlJoin join : query.joins) {
+            names.add(join.table.alias)
+        }
+        return new MixedSourceLayout(names, true).completeNest(query)
     }
 
     private SqlQueryNode apply(SqlQuery query, boolean emulateFull) {
@@ -89,6 +126,102 @@ class MixedSourceLayout {
         return nest(query)
     }
 
+    private SqlQueryNode completeNest(SqlQuery query) {
+        collectUsed(query)
+        return apply(query, true)
+    }
+
+    private static boolean rewriteNestedSources(SqlQuery query) {
+        boolean changed = false
+        if (query.from instanceof SqlDerivedTable) {
+            SqlDerivedTable derived = (SqlDerivedTable) query.from
+            SqlQueryNode inner = layoutComplete(derived.query)
+            if (inner !== derived.query) {
+                query.from = new SqlDerivedTable(inner, derived.alias)
+                changed = true
+            }
+        }
+        List<SqlJoin> joins = []
+        for (SqlJoin join : query.joins) {
+            if (join.table instanceof SqlDerivedTable) {
+                SqlDerivedTable derived = (SqlDerivedTable) join.table
+                SqlQueryNode inner = layoutComplete(derived.query)
+                if (inner !== derived.query) {
+                    joins.add(new SqlJoin(join.type, new SqlDerivedTable(inner, derived.alias), join.on))
+                    changed = true
+                    continue
+                }
+            }
+            joins.add(join)
+        }
+        if (changed) {
+            query.joins.clear()
+            query.joins.addAll(joins)
+        }
+        return changed
+    }
+
+    private void collectUsed(SqlQuery query) {
+        for (SqlProjection projection : query.projections) {
+            collectExpr(projection.expr)
+        }
+        collectExpr(query.where)
+        for (SqlExpr key : query.groupBy) {
+            collectExpr(key)
+        }
+        collectExpr(query.having)
+        for (SqlOrderSpec spec : query.orderBy) {
+            collectExpr(spec.expr)
+        }
+        for (SqlJoin join : query.joins) {
+            collectExpr(join.on)
+        }
+    }
+
+    private void collectExpr(SqlExpr expr) {
+        if (expr == null) {
+            return
+        }
+        if (expr instanceof SqlColumn) {
+            SqlColumn column = (SqlColumn) expr
+            if (column.tableAlias != null && aliasNames.contains(column.tableAlias) && column.column != PRESENCE) {
+                LinkedHashSet<String> columns = usedColumns.get(column.tableAlias)
+                if (columns == null) {
+                    columns = new LinkedHashSet<>()
+                    usedColumns.put(column.tableAlias, columns)
+                }
+                columns.add(column.column)
+            }
+            return
+        }
+        if (expr instanceof SqlBinary) {
+            collectExpr(expr.left)
+            collectExpr(expr.right)
+        } else if (expr instanceof SqlUnary) {
+            collectExpr(expr.operand)
+        } else if (expr instanceof SqlIsNull) {
+            collectExpr(expr.expr)
+        } else if (expr instanceof SqlIn) {
+            collectExpr(expr.expr)
+            for (SqlExpr value : expr.values) {
+                collectExpr(value)
+            }
+        } else if (expr instanceof SqlLike) {
+            collectExpr(expr.expr)
+            collectExpr(expr.pattern)
+        } else if (expr instanceof SqlFunction) {
+            for (SqlExpr arg : expr.args) {
+                collectExpr(arg)
+            }
+        } else if (expr instanceof SqlCast) {
+            collectExpr(expr.expr)
+        } else if (expr instanceof SqlCaseWhen) {
+            collectExpr(expr.condition)
+            collectExpr(expr.thenExpr)
+            collectExpr(expr.elseExpr)
+        }
+    }
+
     private SqlQueryNode nest(SqlQuery query) {
         Rel rel = new Rel()
         rel.from = query.from
@@ -103,7 +236,7 @@ class MixedSourceLayout {
                 appendJoin(rel, join, index)
             }
         }
-        return finish(rel, query)
+        return userProjections ? finishComplete(rel, query) : finish(rel, query)
     }
 
     private void appendJoin(Rel rel, SqlJoin join, int index) {
@@ -114,7 +247,11 @@ class MixedSourceLayout {
 
     private Rel nestFull(Rel rel, SqlJoin join, int index) {
         List<SqlProjection> projections = project(rel)
-        projections.add(new SqlProjection(new SqlStar(aliasNames[index])))
+        if (userProjections) {
+            projections.addAll(directColumns(index, aliasNames[index]))
+        } else {
+            projections.add(new SqlProjection(new SqlStar(aliasNames[index])))
+        }
         SqlExpr on = rewriteExpr(join.on, rel, aliasNames[index])
         SqlQuery left = materialize(rel, SqlJoin.Type.LEFT, join.table, on, projections, null)
         SqlQuery right = materialize(rel, SqlJoin.Type.RIGHT, join.table, on, projections, absence(rel))
@@ -141,6 +278,13 @@ class MixedSourceLayout {
     }
 
     private List<SqlProjection> project(Rel rel) {
+        if (userProjections) {
+            List<SqlProjection> projections = []
+            for (int index : rel.output) {
+                projections.addAll(passedColumns(rel, index))
+            }
+            return projections
+        }
         List<SqlProjection> projections = []
         if (rel.container != null) {
             projections.add(new SqlProjection(new SqlStar(rel.container)))
@@ -151,6 +295,42 @@ class MixedSourceLayout {
         return projections
     }
 
+    private List<SqlProjection> directColumns(int index, String alias) {
+        List<SqlProjection> projections = []
+        projections.add(new SqlProjection(new SqlColumn(alias, PRESENCE), presenceOut(index)))
+        LinkedHashSet<String> columns = usedColumns.get(alias)
+        if (columns != null) {
+            for (String column : columns) {
+                projections.add(new SqlProjection(new SqlColumn(alias, column), columnOut(index, column)))
+            }
+        }
+        return projections
+    }
+
+    private List<SqlProjection> passedColumns(Rel rel, int index) {
+        String alias = aliasNames[index]
+        if (rel.direct.contains(alias)) {
+            return directColumns(index, alias)
+        }
+        List<SqlProjection> projections = []
+        projections.add(new SqlProjection(new SqlColumn(rel.container, presenceOut(index)), presenceOut(index)))
+        LinkedHashSet<String> columns = usedColumns.get(alias)
+        if (columns != null) {
+            for (String column : columns) {
+                projections.add(new SqlProjection(new SqlColumn(rel.container, columnOut(index, column)), columnOut(index, column)))
+            }
+        }
+        return projections
+    }
+
+    private static String presenceOut(int index) {
+        return '__ginq_p' + index
+    }
+
+    private static String columnOut(int index, String column) {
+        return '__ginq_' + index + '_' + column
+    }
+
     private SqlExpr absence(Rel rel) {
         SqlExpr acc = null
         for (int index : rel.output) {
@@ -158,7 +338,7 @@ class MixedSourceLayout {
             if (rel.direct.contains(aliasNames[index])) {
                 column = new SqlColumn(aliasNames[index], PRESENCE)
             } else {
-                column = new SqlColumn(rel.container, '__ginqabs_' + index)
+                column = new SqlColumn(rel.container, userProjections ? presenceOut(index) : '__ginqabs_' + index)
             }
             SqlExpr pred = new SqlIsNull(column, false)
             acc = acc == null ? pred : new SqlBinary('AND', acc, pred)
@@ -193,6 +373,27 @@ class MixedSourceLayout {
         return query
     }
 
+    private SqlQuery finishComplete(Rel rel, SqlQuery original) {
+        SqlQuery query = new SqlQuery()
+        query.distinct = original.distinct
+        query.from = rel.from
+        query.joins.addAll(rel.joins)
+        for (SqlProjection projection : original.projections) {
+            query.projections.add(new SqlProjection(rewriteExpr(projection.expr, rel), projection.alias))
+        }
+        query.where = rewriteExpr(original.where, rel)
+        for (SqlExpr key : original.groupBy) {
+            query.groupBy.add(rewriteExpr(key, rel))
+        }
+        query.having = rewriteExpr(original.having, rel)
+        for (SqlOrderSpec spec : original.orderBy) {
+            query.orderBy.add(new SqlOrderSpec(rewriteExpr(spec.expr, rel), spec.asc, spec.nullsLast))
+        }
+        query.offset = original.offset
+        query.fetch = original.fetch
+        return query
+    }
+
     private SqlOrderSpec rewriteOrder(SqlOrderSpec spec, Rel rel) {
         if (!(spec.expr instanceof SqlColumn)) {
             throw new GroovyBugError('emulated full join order key is not a column')
@@ -220,7 +421,8 @@ class MixedSourceLayout {
             if (index < 0) {
                 return column
             }
-            return new SqlColumn(rel.container, '__ginqref_' + index + '_' + column.column)
+            String exposed = userProjections ? columnOut(index, column.column) : '__ginqref_' + index + '_' + column.column
+            return new SqlColumn(rel.container, exposed)
         }
         if (expr instanceof SqlBinary) {
             return new SqlBinary(expr.op, rewriteExpr(expr.left, rel, alsoDirect), rewriteExpr(expr.right, rel, alsoDirect))
