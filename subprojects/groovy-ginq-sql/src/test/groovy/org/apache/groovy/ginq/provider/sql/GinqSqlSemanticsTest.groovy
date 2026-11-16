@@ -104,6 +104,77 @@ class GinqSqlSemanticsTest {
     }
 
     @Test
+    void testPresenceColumnIsAddedInsideEachSource() {
+        def sql = SqlGinqRuntime.prepareMixedSql(
+                'SELECT e.*, d.* FROM employees e LEFT JOIN departments d ON e.deptId = d.id WHERE e.name = ?',
+                [['id', 'name'], ['id', 'name']],
+                '"' as char)
+        assert sql.contains('FROM (SELECT "__ginq_src".*, 1 AS "__ginq_present" FROM employees "__ginq_src") e')
+        assert sql.contains('LEFT JOIN (SELECT "__ginq_src".*, 1 AS "__ginq_present" FROM departments "__ginq_src") d')
+        assert sql.contains('e."__ginq_present" AS "__ginq0_2"')
+        assert sql.contains('d."__ginq_present" AS "__ginq1_2"')
+        assert sql.endsWith('WHERE e.name = ?')
+        assert !sql.contains('1 AS "__ginq_present" FROM employees e')
+
+        def jooq = SqlGinqRuntime.prepareMixedSql(
+                'select e.*, d.* from employees e right outer join departments d on e.deptId is not distinct from d.id',
+                [['ID', 'NAME'], ['ID', 'NAME']],
+                '"' as char)
+        assert jooq.contains('right outer join (SELECT "__ginq_src".*, 1 AS "__ginq_present" FROM departments "__ginq_src") d')
+        assert jooq.contains('FROM (SELECT "__ginq_src".*, 1 AS "__ginq_present" FROM employees "__ginq_src") e')
+
+        def full = SqlGinqRuntime.prepareMixedSql(
+                'SELECT e.*, d.* FROM "employees" "e" FULL OUTER JOIN "departments" "d" ON "e"."deptId" = "d"."id"',
+                [['id'], ['id']],
+                '"' as char)
+        assert full.contains('LEFT JOIN (SELECT "__ginq_src".*, 1 AS "__ginq_present" FROM "departments" "__ginq_src") "d"')
+        assert full.contains('RIGHT JOIN (SELECT "__ginq_src".*, 1 AS "__ginq_present" FROM "departments" "__ginq_src") "d"')
+        assert full.contains('"e"."__ginq_present" IS NULL')
+        assert full.contains('UNION ALL')
+
+        def nestedJoin = SqlGinqRuntime.prepareMixedSql(
+                "SELECT e.*, d.* FROM employees e LEFT JOIN departments d ON e.name LIKE ? ESCAPE '!' ORDER BY e.name",
+                [['name'], ['name']],
+                '"' as char)
+        assert nestedJoin.contains("ON e.name LIKE ? ESCAPE '!'")
+        assert nestedJoin.endsWith('ORDER BY e.name')
+
+        def derived = SqlGinqRuntime.prepareMixedSql(
+                'SELECT v.*, d.* FROM (SELECT name FROM employees WHERE name = ?) v INNER JOIN hr.departments d ON v.name = d.name',
+                [['name'], ['id', 'name']],
+                '`' as char)
+        assert derived.contains('FROM (SELECT `__ginq_src`.*, 1 AS `__ginq_present` FROM (SELECT name FROM employees WHERE name = ?) `__ginq_src`) v')
+        assert derived.contains('INNER JOIN (SELECT `__ginq_src`.*, 1 AS `__ginq_present` FROM hr.departments `__ginq_src`) d')
+
+        def collision = SqlGinqRuntime.prepareMixedSql(
+                'SELECT e.*, m.* FROM anchors e CROSS JOIN marks m',
+                [['id'], ['__ginq_present', 'name']],
+                '"' as char)
+        assert collision.contains('1 AS "__ginq_present_1"')
+        assert !collision.contains('1 AS "__ginq_present"')
+
+        def expanded = SqlGinqRuntime.prepareMixedSql(
+                'SELECT e.*, d.* FROM employees e FULL OUTER JOIN departments d ON e.deptId = d.id AND d.id <> ? ORDER BY e.name FETCH FIRST ? ROWS ONLY',
+                [['id'], ['id']],
+                '"' as char)
+        assert expanded.contains(' LEFT JOIN ')
+        assert expanded.contains(' RIGHT JOIN ')
+        assert expanded.contains('UNION ALL')
+        assert expanded.contains('e."__ginq_present" IS NULL')
+        assert !expanded.toUpperCase(Locale.ROOT).contains('FULL')
+        assert expanded.endsWith('ORDER BY e.name FETCH FIRST ? ROWS ONLY')
+        assert 3 == expanded.count('?')
+
+        def chain = SqlGinqRuntime.prepareMixedSql(
+                'SELECT a.*, b.*, c.* FROM aa a FULL JOIN bb b ON a.id = b.id FULL JOIN cc c ON b.id = c.id',
+                [['id'], ['id'], ['id']],
+                '"' as char)
+        assert 3 == chain.count('UNION ALL')
+        assert chain.contains('a."__ginq_present" IS NULL')
+        assert chain.contains('b."__ginq_present" IS NULL')
+    }
+
+    @Test
     void testNullParameterMatchesNullColumn() {
         def wanted = null
         def result = GQL(provider: 'native-sql', dataSource: db) {

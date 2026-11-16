@@ -44,7 +44,7 @@ class SqlJoin {
         INNER('INNER JOIN'),
         LEFT('LEFT JOIN'),
         RIGHT('RIGHT JOIN'),
-        FULL('FULL JOIN'),
+        FULL('FULL OUTER JOIN'),
         CROSS('CROSS JOIN')
 
         final String sqlText

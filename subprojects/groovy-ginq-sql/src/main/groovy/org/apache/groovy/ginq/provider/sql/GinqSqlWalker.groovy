@@ -205,7 +205,7 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
     }
 
     private Expression runCollection(GinqExpression tail) {
-        GinqAstWalker walker = new GinqAstWalker(sourceUnit)
+        GinqAstWalker walker = new MixedTailWalker(sourceUnit)
         walker.configuration = Collections.<String, String>emptyMap()
         walker.configurationExpressions = Collections.<String, Expression>emptyMap()
         return (Expression) walker.visit(tail)

@@ -1238,8 +1238,16 @@ explicitly (`alias.col AS __ginqN_M`) and read back by ordinal. The in-memory ta
 `e.name` and `d.name`, including when both sources have a column called `name`. Duplicate labels
 within one source are rejected rather than dropping a value: JDBC drivers differ on labels,
 duplicates, case folding and quoting, and a label map is not treated as a faithful copy of the
-table. The ordinal that re-aligns the join is not stored under a column name, so a real column
-called `__ginq_mixed_key` stays readable. A `where` clause is kept together: if any part of it cannot be translated, the whole
+table. A real column called `__ginq_mixed_key` stays readable; mixed mode does not store join
+alignment under a column name. An unmatched side of a pushed outer join is null, as it is for
+the collection provider. Each joined source is wrapped so the source itself carries a presence
+column, for example `(SELECT t.*, 1 AS "__ginq_present" FROM departments t) d`. The outer join
+makes that column null when the side has no row, and the name is chosen so it does not collide
+with a real column. A row that exists but whose columns are all null therefore stays a non-null
+row, while `d == null` is true when the join did not match. The in-memory tail pairs those
+already aligned rows by index, so a null alias stays null for a later `where`, `select`,
+`orderby`, `groupby` or join. A database without `FULL OUTER JOIN` still runs a pushed
+full join: the left join, plus the right-join rows whose presence marker is null. A `where` clause is kept together: if any part of it cannot be translated, the whole
 predicate runs in memory and only the preceding `from`/`join` clauses are pushed.
 `groupby` and its `having` clause are not pushed when a later clause falls back to memory, so
 grouped results keep collection-provider semantics. `orderby` and `limit` are pushed only when

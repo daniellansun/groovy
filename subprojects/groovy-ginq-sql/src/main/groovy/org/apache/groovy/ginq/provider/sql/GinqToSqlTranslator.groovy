@@ -29,7 +29,6 @@ import org.apache.groovy.ginq.dsl.expression.FromExpression
 import org.apache.groovy.ginq.dsl.expression.GinqExpression
 import org.apache.groovy.ginq.dsl.expression.GroupExpression
 import org.apache.groovy.ginq.dsl.expression.JoinExpression
-import org.apache.groovy.ginq.dsl.expression.OnExpression
 import org.apache.groovy.ginq.dsl.expression.SelectExpression
 import org.apache.groovy.ginq.dsl.expression.SetOperationExpression
 import org.apache.groovy.ginq.provider.sql.ir.SqlBinary
@@ -94,10 +93,8 @@ import static org.codehaus.groovy.ast.tools.GeneralUtils.callX
 import static org.codehaus.groovy.ast.tools.GeneralUtils.castX
 import static org.codehaus.groovy.ast.tools.GeneralUtils.classX
 import static org.codehaus.groovy.ast.tools.GeneralUtils.constX
-import static org.codehaus.groovy.ast.tools.GeneralUtils.eqX
 import static org.codehaus.groovy.ast.tools.GeneralUtils.minusX
 import static org.codehaus.groovy.ast.tools.GeneralUtils.plusX
-import static org.codehaus.groovy.ast.tools.GeneralUtils.varX
 
 /**
  * Translates the GINQ AST into the SQL IR. In strict mode every construct
@@ -1141,19 +1138,18 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
         if (Boolean.TRUE == ginq.getNodeMetaData(GinqAstBuilder.GINQ_SELECT_DISTINCT)) {
             tail.putNodeMetaData(GinqAstBuilder.GINQ_SELECT_DISTINCT, Boolean.TRUE)
         }
-        String previousAlias = fromExpression.aliasExpr.text
         for (int i = 0; i < joins.size(); i++) {
             JoinExpression original = joins[i]
             if (i < pushedJoins) {
+                // The SQL join already aligned these lists, including nulls for
+                // unmatched outer-join sides. A collection join would drop those
+                // nulls or throw from mixedOrdinal, so the tail pairs by index.
                 JoinExpression zipped = new JoinExpression('join', original.aliasExpr, original.dataSourceExpr)
-                zipped.onExpression = new OnExpression(eqX(
-                        callX(classX(SQL_GINQ_RUNTIME_TYPE), 'mixedOrdinal', varX(previousAlias)),
-                        callX(classX(SQL_GINQ_RUNTIME_TYPE), 'mixedOrdinal', varX(original.aliasExpr.text))))
+                zipped.putNodeMetaData(INDEX_ALIGNED_JOIN, Boolean.TRUE)
                 tail.addJoinExpression(zipped)
             } else {
                 tail.addJoinExpression(original)
             }
-            previousAlias = original.aliasExpr.text
         }
         if (!wherePushed && ginq.whereExpression != null) {
             tail.whereExpression = ginq.whereExpression
@@ -1252,6 +1248,13 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
     private static enum QueryContext {
         TOP_LEVEL, INNER_OPERAND, FINAL_OPERAND
     }
+
+    /**
+     * Marks a pushed join whose two sides are already aligned by
+     * {@code SqlGinqRuntime.zipAliases}, one entry per output row.
+     */
+    @PackageScope
+    static final String INDEX_ALIGNED_JOIN = 'org.apache.groovy.ginq.provider.sql.IndexAlignedJoin'
 
     private static final ClassNode SQL_GINQ_RUNTIME_TYPE = ClassHelper.makeCached(SqlGinqRuntime)
     private static final List<String> ORDER_OPTION_LIST = ['asc', 'desc']

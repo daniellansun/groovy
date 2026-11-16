@@ -25,9 +25,10 @@ import java.util.Map;
 
 /**
  * One source row rebuilt from a mixed-mode join. Column values live in the
- * map under the names reported for that source. The row ordinal used to
- * re-align a pushed join is kept beside the map, so a real column cannot
- * be overwritten by it and a column of any name stays readable.
+ * map under the names reported for that source. The output-row index is kept
+ * beside the map, so a real column cannot be overwritten by it and a column
+ * of any name stays readable. An unmatched outer-join side is null rather
+ * than one of these rows.
  *
  * @since 7.0.0
  */

@@ -132,7 +132,7 @@ class GinqSqlMixedModeTest {
             from e in 'employees'
             leftjoin d in 'departments' on e.deptId == d.id
             orderby e.name
-            select e.name, d.name?.reverse()
+            select e.name, d?.name?.reverse()
         }
         assert [['Alice', 'veD'], ['Bob', 'veD'], ['Carol', 'selaS'], ['Dave', null], ['Eve', 'selaS'], ['Frank', 'troppuS']] ==
                 result.toList()
