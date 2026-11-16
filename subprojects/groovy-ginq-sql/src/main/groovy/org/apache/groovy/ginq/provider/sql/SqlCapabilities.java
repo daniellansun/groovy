@@ -56,6 +56,16 @@ public final class SqlCapabilities {
     }
 
     /**
+     * Whether the dialect can spell {@code FULL OUTER JOIN}. H2, MySQL and
+     * MariaDB cannot; a mixed-mode full join is then a nested union instead.
+     *
+     * @return {@code false} when full joins must be emulated
+     */
+    public boolean supportsFullOuterJoin() {
+        return !"h2".equals(dialectName) && !"mysql".equals(dialectName);
+    }
+
+    /**
      * The dialect family, for diagnostics.
      *
      * @return the canonical dialect name

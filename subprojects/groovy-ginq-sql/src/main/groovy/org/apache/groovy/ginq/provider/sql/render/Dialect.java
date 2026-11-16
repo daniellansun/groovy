@@ -43,6 +43,25 @@ public interface Dialect {
     }
 
     /**
+     * Renders an identifier, quoting synthetic {@code __ginq} names so a
+     * presence column does not fold into a real column of the same spelling.
+     *
+     * @param identifier the identifier
+     * @return the rendered identifier
+     * @since 7.0.0
+     */
+    default String mixedIdentifier(String identifier) {
+        if (identifier != null && identifier.startsWith("__ginq")) {
+            char mark = identifierQuote();
+            if (mark != 0) {
+                String quote = String.valueOf(mark);
+                return quote + identifier.replace(quote, quote + quote) + quote;
+            }
+        }
+        return identifier(identifier);
+    }
+
+    /**
      * Renders a simple or schema-qualified name. Each part is passed through
      * {@link #identifier(String)}, so quoting matches other table and column
      * references in this dialect.

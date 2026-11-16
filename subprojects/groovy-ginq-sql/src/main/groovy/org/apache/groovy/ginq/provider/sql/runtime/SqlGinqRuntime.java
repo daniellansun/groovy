@@ -35,6 +35,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static groovy.lang.Tuple.tuple;
 
@@ -181,9 +183,7 @@ public final class SqlGinqRuntime {
         char quote = quoteChar(identifierQuote);
         String presence = presenceName(columnsByAlias);
         List<List<String>> extended = withPresence(columnsByAlias, presence);
-        PlannedSql planned = planMixedSql(sqlText, columnsByAlias, quote);
-        String rewritten = planned.sql;
-        List<Object> boundParams = planned.bind(params);
+        String rewritten = prepareMixedSql(sqlText, columnsByAlias, quote);
         int aliasCount = extended.size();
         int columnTotal = 0;
         for (List<String> names : extended) {
@@ -196,7 +196,7 @@ public final class SqlGinqRuntime {
         int expected = columnTotal;
         withConnection(dataSource, connection -> {
             try (PreparedStatement statement = connection.prepareStatement(rewritten)) {
-                bind(statement, boundParams);
+                bind(statement, params);
                 try (ResultSet rs = statement.executeQuery()) {
                     ResultSetMetaData metaData = rs.getMetaData();
                     if (metaData.getColumnCount() != expected) {
@@ -255,269 +255,228 @@ public final class SqlGinqRuntime {
     }
 
     /**
-     * Rewrites a mixed-mode {@code SELECT alias.*, ...} prefix so each source
-     * carries a presence column and every source column is named. The presence
-     * name is chosen not to collide with the supplied labels. A constant in
-     * the outer select list would stay non-null for an unmatched outer-join
-     * side, so the constant is added inside each source instead.
+     * Rewrites a mixed-mode prefix so each source column is named and a
+     * presence column is projected with it. Sources wrapped by the planner
+     * already carry that column; other prefixes are wrapped here. Full joins
+     * are nested in the planner, not by flattening this text.
      *
-     * @param sql the rendered prefix, projecting {@code alias.*}
-     * @param columnsByAlias column labels for each star, in select-list order, without the presence column
+     * @param sql the rendered prefix
+     * @param columnsByAlias column labels for each alias, in select-list order, without the presence column
      * @param quote the identifier quote, or {@code 0} for simple unquoted names
      * @return the SQL to execute
      * @throws SQLException when the prefix cannot be rewritten
      */
     public static String prepareMixedSql(String sql, List<List<String>> columnsByAlias, char quote) throws SQLException {
-        return planMixedSql(sql, columnsByAlias, quote).sql;
-    }
-
-    /**
-     * SQL to run, plus how to repeat bound parameters when a full join was
-     * expanded into more than one branch. Placeholders in the trailing
-     * order and limit clauses stay once; placeholders in each branch repeat.
-     */
-    private static PlannedSql planMixedSql(String sql, List<List<String>> columnsByAlias, char quote) throws SQLException {
         String presence = presenceName(columnsByAlias);
         List<List<String>> extended = withPresence(columnsByAlias, presence);
-        int fromAt = indexOfTopLevelKeyword(sql, "from");
-        if (fromAt < 0) {
-            throw new SQLException("mixed-mode SQL has no FROM clause to mark presence");
+        if (!prewrapped(sql)) {
+            return rewriteStarSelect(wrapPresenceSources(sql, columnsByAlias.size(), presence, quote), extended, quote);
         }
-        int fromEnd = endOfFromList(sql, fromAt);
-        if (!mentionsFullJoin(sql, fromAt, fromEnd)) {
-            String wrapped = wrapPresenceSources(sql, columnsByAlias.size(), presence, quote);
-            return new PlannedSql(rewriteStarSelect(wrapped, extended, quote), 1, 0);
-        }
-        return planFullJoin(sql, fromAt, fromEnd, extended, presence, quote);
+        String named = substitutePresence(sql, presence, quote);
+        named = expandAllSelectLists(named, extended, quote);
+        return replaceTokens(named, extended, quote);
     }
 
-    /**
-     * H2 has no {@code FULL OUTER JOIN}, and neither do MySQL or MariaDB.
-     * A full join is a left join plus the right-join rows whose left side is
-     * absent. The presence column tells those rows apart, including when the
-     * join key itself is null. Each branch carries the same placeholders, so
-     * the caller repeats the branch parameters once per branch.
-     */
-    private static PlannedSql planFullJoin(String sql, int fromAt, int fromEnd, List<List<String>> extended,
-                                           String presence, char quote) throws SQLException {
-        ParsedFrom parsed = parseFrom(sql, fromAt, fromEnd);
-        String selectPrefix = sql.substring(0, fromAt);
-        WhereSuffix suffix = splitSuffix(sql.substring(fromEnd));
-        List<FullVariant> variants = expandFullJoins(parsed);
-        StringBuilder combined = new StringBuilder();
-        for (int v = 0; v < variants.size(); v++) {
-            if (v > 0) {
-                combined.append(" UNION ALL ");
+    private static boolean prewrapped(String sql) {
+        return sql.contains("__ginq_src") || sql.contains("__ginq_present") || sql.contains("__ginqf");
+    }
+
+    private static String substitutePresence(String sql, String presence, char quote) {
+        if (PRESENCE_BASE.equals(presence)) {
+            return sql;
+        }
+        String from = quoteIdentifierUnchecked(PRESENCE_BASE, quote);
+        String to = quoteIdentifierUnchecked(presence, quote);
+        return sql.replace(from, to);
+    }
+
+    private static String quoteIdentifierUnchecked(String name, char quote) {
+        if (quote == 0) {
+            return name;
+        }
+        String mark = String.valueOf(quote);
+        return mark + name.replace(mark, mark + mark) + mark;
+    }
+
+    private static String expandAllSelectLists(String sql, List<List<String>> extended, char quote) throws SQLException {
+        List<int[]> ranges = starSelectRanges(sql);
+        for (int i = ranges.size() - 1; i >= 0; i--) {
+            int from = ranges.get(i)[0];
+            int to = ranges.get(i)[1];
+            String expanded = expandStarList(sql.substring(from, to).trim(), extended, quote);
+            if (expanded != null) {
+                sql = sql.substring(0, from) + ' ' + expanded + ' ' + sql.substring(to);
             }
-            String branch = selectPrefix + renderFrom(parsed, variants.get(v), presence, quote)
-                    + whereClause(suffix.whereBody, variants.get(v).nullAnchors, presence, quote);
-            combined.append(rewriteStarSelect(branch, extended, quote));
         }
-        combined.append(suffix.rest);
-        return new PlannedSql(combined.toString(), variants.size(), countPlaceholders(suffix.rest));
+        return sql;
     }
 
-    private static List<FullVariant> expandFullJoins(ParsedFrom parsed) {
-        List<FullVariant> variants = new ArrayList<>();
-        variants.add(FullVariant.start(parsed));
-        for (int i = 0; i < parsed.joins.size(); i++) {
-            ParsedJoin join = parsed.joins.get(i);
-            if (!join.full) {
-                for (FullVariant variant : variants) {
-                    if (join.right) {
-                        variant.anchor = join.source.alias;
-                    }
+    private static List<int[]> starSelectRanges(String sql) throws SQLException {
+        List<int[]> ranges = new ArrayList<>();
+        int depth = 0;
+        Quote quote = Quote.NONE;
+        for (int i = 0; i < sql.length(); i++) {
+            char ch = sql.charAt(i);
+            if (quote != Quote.NONE) {
+                i = skipQuoted(sql, i, quote) - 1;
+                quote = Quote.NONE;
+                continue;
+            }
+            Quote opened = openingQuote(ch);
+            if (opened != Quote.NONE) {
+                quote = opened;
+                continue;
+            }
+            if (ch == '(') {
+                depth++;
+            } else if (ch == ')') {
+                depth = Math.max(0, depth - 1);
+            } else if (isBareKeywordAt(sql, i, "select")) {
+                int listAt = i + "select".length();
+                int fromAt = fromAtDepth(sql, listAt, depth);
+                if (fromAt > listAt) {
+                    ranges.add(new int[] {listAt, fromAt});
                 }
-                continue;
             }
-            List<FullVariant> next = new ArrayList<>(variants.size() * 2);
-            for (FullVariant variant : variants) {
-                next.add(variant.withJoin(i, "LEFT JOIN", variant.anchor));
-                next.add(variant.withJoin(i, "RIGHT JOIN", join.source.alias).requireNull(variant.anchor));
-            }
-            variants = next;
         }
-        return variants;
+        return ranges;
     }
 
-    private static String renderFrom(ParsedFrom parsed, FullVariant variant, String presence, char quote) throws SQLException {
-        StringBuilder from = new StringBuilder("FROM ");
-        from.append(wrapSource(parsed.first, presence, quote));
-        for (int i = 0; i < parsed.joins.size(); i++) {
-            ParsedJoin join = parsed.joins.get(i);
-            from.append(' ').append(variant.kinds.get(i)).append(' ');
-            from.append(wrapSource(join.source, presence, quote));
-            if (!join.onText.isEmpty()) {
-                from.append(' ').append(join.onText);
-            }
-        }
-        return from.toString();
-    }
-
-    private static String whereClause(String whereBody, List<String> nullAnchors, String presence, char quote) throws SQLException {
-        StringBuilder filter = new StringBuilder();
-        for (String anchor : nullAnchors) {
-            if (filter.length() > 0) {
-                filter.append(" AND ");
-            }
-            filter.append(anchor).append('.').append(quoteIdentifier(presence, quote)).append(" IS NULL");
-        }
-        if (filter.length() == 0 && whereBody == null) {
-            return "";
-        }
-        if (whereBody == null) {
-            return " WHERE " + filter;
-        }
-        if (filter.length() == 0) {
-            return " WHERE " + whereBody;
-        }
-        return " WHERE " + filter + " AND (" + whereBody + ")";
-    }
-
-    private static boolean mentionsFullJoin(String sql, int fromAt, int fromEnd) throws SQLException {
-        int i = fromAt;
-        int depth = 0;
+    private static int fromAtDepth(String sql, int start, int baseDepth) throws SQLException {
+        int depth = baseDepth;
         Quote quote = Quote.NONE;
-        while (i < fromEnd) {
+        for (int i = start; i < sql.length(); i++) {
             char ch = sql.charAt(i);
             if (quote != Quote.NONE) {
-                i = skipQuoted(sql, i, quote);
+                i = skipQuoted(sql, i, quote) - 1;
                 quote = Quote.NONE;
                 continue;
             }
             Quote opened = openingQuote(ch);
             if (opened != Quote.NONE) {
                 quote = opened;
-                i++;
                 continue;
             }
             if (ch == '(') {
                 depth++;
-                i++;
-                continue;
-            }
-            if (ch == ')') {
-                depth = Math.max(0, depth - 1);
-                i++;
-                continue;
-            }
-            if (depth == 0 && isBareKeywordAt(sql, i, "full") && matchJoinPhrase(sql, i) > 0) {
-                return true;
-            }
-            i++;
-        }
-        return false;
-    }
-
-    private static ParsedFrom parseFrom(String sql, int fromAt, int fromEnd) throws SQLException {
-        int i = fromAt + "from".length();
-        SourceAndAlias first = readSource(sql, i, fromEnd);
-        List<ParsedJoin> joins = new ArrayList<>();
-        String anchor = first.alias;
-        i = first.end;
-        while (true) {
-            i = skipWs(sql, i, fromEnd);
-            if (i >= fromEnd) {
-                break;
-            }
-            int joinLength = matchJoinPhrase(sql, i);
-            if (joinLength < 0) {
-                throw new SQLException("mixed-mode FROM clause could not be wrapped near `" + snippet(sql, i) + "`");
-            }
-            String kindText = sql.substring(i, i + joinLength);
-            boolean full = kindText.regionMatches(true, 0, "full", 0, 4);
-            boolean right = kindText.regionMatches(true, 0, "right", 0, 5);
-            i += joinLength;
-            SourceAndAlias source = readSource(sql, i, fromEnd);
-            i = source.end;
-            i = skipWs(sql, i, fromEnd);
-            String onText = "";
-            if (i < fromEnd && isBareKeywordAt(sql, i, "on")) {
-                int onAt = i;
-                int onEnd = endOfOnClause(sql, i + "on".length(), fromEnd);
-                onText = sql.substring(onAt, onEnd).trim();
-                i = onEnd;
-            }
-            joins.add(new ParsedJoin(kindText, source, onText, full, right));
-            if (full || right) {
-                anchor = source.alias;
-            }
-        }
-        return new ParsedFrom(first, joins);
-    }
-
-    private static WhereSuffix splitSuffix(String suffix) throws SQLException {
-        int i = skipWs(suffix, 0, suffix.length());
-        if (i >= suffix.length() || !isBareKeywordAt(suffix, i, "where")) {
-            return new WhereSuffix(null, suffix);
-        }
-        int bodyAt = i + "where".length();
-        int bodyEnd = endOfWhere(suffix, bodyAt);
-        String body = suffix.substring(bodyAt, bodyEnd).trim();
-        return new WhereSuffix(body, suffix.substring(bodyEnd));
-    }
-
-    private static int endOfWhere(String sql, int start) throws SQLException {
-        int i = start;
-        int depth = 0;
-        Quote quote = Quote.NONE;
-        while (i < sql.length()) {
-            char ch = sql.charAt(i);
-            if (quote != Quote.NONE) {
-                i = skipQuoted(sql, i, quote);
-                quote = Quote.NONE;
-                continue;
-            }
-            Quote opened = openingQuote(ch);
-            if (opened != Quote.NONE) {
-                quote = opened;
-                i++;
-                continue;
-            }
-            if (ch == '(') {
-                depth++;
-                i++;
-                continue;
-            }
-            if (ch == ')') {
-                depth = Math.max(0, depth - 1);
-                i++;
-                continue;
-            }
-            if (depth == 0 && (isBareKeywordAt(sql, i, "order") || isBareKeywordAt(sql, i, "limit")
-                    || isBareKeywordAt(sql, i, "fetch") || isBareKeywordAt(sql, i, "offset")
-                    || isBareKeywordAt(sql, i, "group") || isBareKeywordAt(sql, i, "having")
-                    || isBareKeywordAt(sql, i, "union"))) {
+            } else if (ch == ')') {
+                depth--;
+            } else if (depth == baseDepth && isBareKeywordAt(sql, i, "from")) {
                 return i;
             }
-            i++;
         }
-        return sql.length();
+        return -1;
     }
 
-    private static int countPlaceholders(String sql) throws SQLException {
-        int count = 0;
-        int i = 0;
-        Quote quote = Quote.NONE;
-        while (i < sql.length()) {
-            char ch = sql.charAt(i);
-            if (quote != Quote.NONE) {
-                i = skipQuoted(sql, i, quote);
-                quote = Quote.NONE;
-                continue;
+    private static final Pattern STAR_ITEM = Pattern.compile(
+            "^(?:\"([^\"]+)\"|`([^`]+)`|([A-Za-z_][A-Za-z0-9_]*))\\.\\*$");
+    private static final Pattern CONTAINER = Pattern.compile("__ginqf(\\d+)_(\\d+)");
+
+    private static String expandStarList(String selectList, List<List<String>> extended, char quote) throws SQLException {
+        List<String> items = new ArrayList<>();
+        for (String item : splitTopLevel(selectList, ',')) {
+            String trimmed = item.trim();
+            if (!STAR_ITEM.matcher(trimmed).matches()) {
+                return null;
             }
-            Quote opened = openingQuote(ch);
-            if (opened != Quote.NONE) {
-                quote = opened;
-                i++;
-                continue;
-            }
-            if (ch == '?') {
-                count++;
-            }
-            i++;
+            items.add(trimmed);
         }
-        return count;
+        if (items.isEmpty()) {
+            return null;
+        }
+        StringBuilder out = new StringBuilder();
+        int next = 0;
+        boolean any = false;
+        for (String item : items) {
+            Matcher star = STAR_ITEM.matcher(item);
+            if (!star.matches()) {
+                return null;
+            }
+            String alias = star.group(1) != null ? star.group(1) : star.group(2) != null ? star.group(2) : star.group(3);
+            String qualifier = item.substring(0, item.length() - 2);
+            Matcher container = CONTAINER.matcher(alias);
+            if (container.matches()) {
+                int start = Integer.parseInt(container.group(1));
+                int end = Integer.parseInt(container.group(2));
+                if (start != next || end > extended.size()) {
+                    throw new SQLException("mixed-mode select list does not match the alias layout");
+                }
+                for (int aliasIndex = start; aliasIndex < end; aliasIndex++) {
+                    any = appendContainerColumns(out, qualifier, aliasIndex, extended.get(aliasIndex), quote, any);
+                }
+                next = end;
+            } else {
+                if (next >= extended.size()) {
+                    throw new SQLException("mixed-mode select list has more stars than aliases");
+                }
+                any = appendAliasedColumns(out, qualifier, next, extended.get(next), quote, any);
+                next++;
+            }
+        }
+        return out.toString();
+    }
+
+    private static boolean appendAliasedColumns(StringBuilder out, String qualifier, int aliasIndex,
+                                                List<String> names, char quote, boolean any) throws SQLException {
+        for (int c = 0; c < names.size(); c++) {
+            if (any) {
+                out.append(", ");
+            }
+            any = true;
+            out.append(qualifier).append('.').append(quoteIdentifier(names.get(c), quote));
+            out.append(" AS ").append(quoteIdentifier("__ginq" + aliasIndex + "_" + c, quote));
+        }
+        return any;
+    }
+
+    private static boolean appendContainerColumns(StringBuilder out, String qualifier, int aliasIndex,
+                                                  List<String> names, char quote, boolean any) throws SQLException {
+        for (int c = 0; c < names.size(); c++) {
+            if (any) {
+                out.append(", ");
+            }
+            any = true;
+            out.append(qualifier).append('.').append(quoteIdentifier("__ginq" + aliasIndex + "_" + c, quote));
+        }
+        return any;
+    }
+
+    private static String replaceTokens(String sql, List<List<String>> extended, char quote) throws SQLException {
+        String mark = quote == 0 ? "" : String.valueOf(quote);
+        Pattern token = Pattern.compile(Pattern.quote(mark) + "__ginq(ref|abs|ord)_(\\d+)(?:_([A-Za-z_][A-Za-z0-9_]*))?" + Pattern.quote(mark));
+        Matcher matcher = token.matcher(sql);
+        StringBuilder out = new StringBuilder();
+        int last = 0;
+        while (matcher.find()) {
+            int aliasIndex = Integer.parseInt(matcher.group(2));
+            if (aliasIndex < 0 || aliasIndex >= extended.size()) {
+                throw new SQLException("mixed-mode column reference is outside the alias layout");
+            }
+            List<String> names = extended.get(aliasIndex);
+            int column;
+            if ("abs".equals(matcher.group(1))) {
+                column = names.size() - 1;
+            } else {
+                column = columnIndex(names, matcher.group(3));
+            }
+            out.append(sql, last, matcher.start());
+            out.append(quoteIdentifier("__ginq" + aliasIndex + "_" + column, quote));
+            last = matcher.end();
+        }
+        out.append(sql, last, sql.length());
+        return out.toString();
+    }
+
+    private static int columnIndex(List<String> names, String column) throws SQLException {
+        if (column == null) {
+            throw new SQLException("mixed-mode column reference is blank");
+        }
+        for (int i = 0; i < names.size(); i++) {
+            if (names.get(i).equalsIgnoreCase(column)) {
+                return i;
+            }
+        }
+        throw new SQLException("mixed-mode join refers to unknown column `" + column + "`");
     }
 
     /**
@@ -955,105 +914,6 @@ public final class SqlGinqRuntime {
             this.text = text;
             this.alias = alias;
             this.end = end;
-        }
-    }
-
-    private static final class ParsedJoin {
-        final String kindText;
-        final SourceAndAlias source;
-        final String onText;
-        final boolean full;
-        final boolean right;
-
-        ParsedJoin(String kindText, SourceAndAlias source, String onText, boolean full, boolean right) {
-            this.kindText = kindText;
-            this.source = source;
-            this.onText = onText;
-            this.full = full;
-            this.right = right;
-        }
-    }
-
-    private static final class ParsedFrom {
-        final SourceAndAlias first;
-        final List<ParsedJoin> joins;
-
-        ParsedFrom(SourceAndAlias first, List<ParsedJoin> joins) {
-            this.first = first;
-            this.joins = joins;
-        }
-    }
-
-    private static final class FullVariant {
-        final List<String> kinds;
-        final List<String> nullAnchors;
-        String anchor;
-
-        private FullVariant(List<String> kinds, List<String> nullAnchors, String anchor) {
-            this.kinds = kinds;
-            this.nullAnchors = nullAnchors;
-            this.anchor = anchor;
-        }
-
-        static FullVariant start(ParsedFrom parsed) {
-            List<String> kinds = new ArrayList<>(parsed.joins.size());
-            for (ParsedJoin join : parsed.joins) {
-                kinds.add(join.kindText);
-            }
-            return new FullVariant(kinds, new ArrayList<>(), parsed.first.alias);
-        }
-
-        FullVariant withJoin(int index, String kind, String anchor) {
-            List<String> copy = new ArrayList<>(kinds);
-            copy.set(index, kind);
-            return new FullVariant(copy, new ArrayList<>(nullAnchors), anchor);
-        }
-
-        FullVariant requireNull(String anchor) {
-            nullAnchors.add(anchor);
-            return this;
-        }
-    }
-
-    private static final class WhereSuffix {
-        final String whereBody;
-        final String rest;
-
-        WhereSuffix(String whereBody, String rest) {
-            this.whereBody = whereBody;
-            this.rest = rest;
-        }
-    }
-
-    private static final class PlannedSql {
-        final String sql;
-        final int copies;
-        final int suffixParams;
-
-        PlannedSql(String sql, int copies, int suffixParams) {
-            this.sql = sql;
-            this.copies = copies;
-            this.suffixParams = suffixParams;
-        }
-
-        List<Object> bind(List<Object> params) throws SQLException {
-            if (copies <= 1) {
-                return params;
-            }
-            int total = params == null ? 0 : params.size();
-            if (suffixParams > total) {
-                throw new SQLException("mixed-mode full join has more trailing placeholders than parameters");
-            }
-            int head = total - suffixParams;
-            List<Object> bound = new ArrayList<>(head * copies + suffixParams);
-            List<Object> leading = params == null ? List.of() : params.subList(0, head);
-            for (int c = 0; c < copies; c++) {
-                bound.addAll(leading);
-            }
-            if (suffixParams > 0) {
-                bound.addAll(params.subList(head, total));
-            }
-            return bound;
         }
     }
 

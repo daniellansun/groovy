@@ -30,10 +30,10 @@ import org.apache.groovy.lang.annotation.Incubating
 @Incubating
 @CompileStatic
 class SqlDerivedTable implements SqlTableSource {
-    final SqlQuery query
+    final SqlQueryNode query
     final String alias
 
-    SqlDerivedTable(SqlQuery query, String alias) {
+    SqlDerivedTable(SqlQueryNode query, String alias) {
         this.query = query
         this.alias = alias
     }

@@ -56,6 +56,7 @@ import org.jooq.DSLContext
 import org.jooq.DataType
 import org.jooq.Field
 import org.jooq.JoinType
+import org.jooq.Name
 import org.jooq.Param
 import org.jooq.SQLDialect
 import org.jooq.Select
@@ -108,7 +109,10 @@ class JooqRenderer {
     }
 
     private RenderedSql doRender(SqlQueryNode queryNode) {
-        DSLContext ctx = DSL.using(dialect, new Settings().withRenderQuotedNames(RenderQuotedNames.NEVER))
+        // EXPLICIT_DEFAULT_UNQUOTED leaves ordinary names unquoted (H2 folds them)
+        // and still quotes names built with DSL.quotedName, which the mixed-mode
+        // presence column needs.
+        DSLContext ctx = DSL.using(dialect, new Settings().withRenderQuotedNames(RenderQuotedNames.EXPLICIT_DEFAULT_UNQUOTED))
         Select select = buildQueryNode(ctx, queryNode)
         return positionalize(ctx.renderNamedParams(select))
     }
@@ -196,19 +200,22 @@ class JooqRenderer {
     private SelectFieldOrAsterisk buildProjection(DSLContext ctx, SqlProjection projection) {
         if (projection.expr instanceof SqlStar) {
             SqlStar star = (SqlStar) projection.expr
-            return star.tableAlias ? DSL.table(DSL.name(star.tableAlias)).asterisk() : DSL.asterisk()
+            return star.tableAlias ? DSL.table(sqlName(star.tableAlias)).asterisk() : DSL.asterisk()
         }
         Field field = buildField(ctx, projection.expr)
-        return projection.alias ? field.as(projection.alias) : field
+        return projection.alias ? field.as(sqlName(projection.alias)) : field
     }
 
     private Table buildTableSource(DSLContext ctx, SqlTableSource tableSource) {
         if (tableSource instanceof SqlTableRef) {
             String[] parts = tableSource.tableName.split('\\.', -1)
-            return DSL.table(DSL.name(parts)).as(tableSource.alias)
+            return DSL.table(sqlName(parts)).as(sqlName(tableSource.alias))
         }
         if (tableSource instanceof SqlDerivedTable) {
-            return buildQuery(ctx, tableSource.query).asTable(tableSource.alias)
+            Select nested = tableSource.query instanceof SqlQuery
+                    ? buildQuery(ctx, (SqlQuery) tableSource.query)
+                    : buildQueryNode(ctx, tableSource.query)
+            return nested.asTable(sqlName(tableSource.alias))
         }
         throw new GroovyBugError("Unknown table source: ${tableSource?.getClass()?.name}")
     }
@@ -262,7 +269,7 @@ class JooqRenderer {
 
     private Field buildField(DSLContext ctx, SqlExpr expr) {
         if (expr instanceof SqlColumn) {
-            return expr.tableAlias ? DSL.field(DSL.name(expr.tableAlias, expr.column)) : DSL.field(DSL.name(expr.column))
+            return expr.tableAlias ? DSL.field(sqlName(expr.tableAlias, expr.column)) : DSL.field(sqlName(expr.column))
         }
         if (expr instanceof SqlParam) {
             return registerParam((SqlParam) expr)
@@ -437,6 +444,15 @@ class JooqRenderer {
             rest[i - 1] = fields.get(i)
         }
         return rest
+    }
+
+    private static Name sqlName(String... parts) {
+        Name acc = null
+        for (String part : parts) {
+            Name next = part != null && part.startsWith('__ginq') ? DSL.quotedName(part) : DSL.name(part)
+            acc = acc == null ? next : acc.append(next)
+        }
+        return acc
     }
 
     private Param registerParam(SqlParam param) {

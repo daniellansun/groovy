@@ -127,10 +127,9 @@ class GinqSqlSemanticsTest {
                 'SELECT e.*, d.* FROM "employees" "e" FULL OUTER JOIN "departments" "d" ON "e"."deptId" = "d"."id"',
                 [['id'], ['id']],
                 '"' as char)
-        assert full.contains('LEFT JOIN (SELECT "__ginq_src".*, 1 AS "__ginq_present" FROM "departments" "__ginq_src") "d"')
-        assert full.contains('RIGHT JOIN (SELECT "__ginq_src".*, 1 AS "__ginq_present" FROM "departments" "__ginq_src") "d"')
-        assert full.contains('"e"."__ginq_present" IS NULL')
-        assert full.contains('UNION ALL')
+        assert full.contains('FULL OUTER JOIN')
+        assert full.contains('1 AS "__ginq_present"')
+        assert !full.contains('UNION ALL')
 
         def nestedJoin = SqlGinqRuntime.prepareMixedSql(
                 "SELECT e.*, d.* FROM employees e LEFT JOIN departments d ON e.name LIKE ? ESCAPE '!' ORDER BY e.name",
@@ -152,26 +151,6 @@ class GinqSqlSemanticsTest {
                 '"' as char)
         assert collision.contains('1 AS "__ginq_present_1"')
         assert !collision.contains('1 AS "__ginq_present"')
-
-        def expanded = SqlGinqRuntime.prepareMixedSql(
-                'SELECT e.*, d.* FROM employees e FULL OUTER JOIN departments d ON e.deptId = d.id AND d.id <> ? ORDER BY e.name FETCH FIRST ? ROWS ONLY',
-                [['id'], ['id']],
-                '"' as char)
-        assert expanded.contains(' LEFT JOIN ')
-        assert expanded.contains(' RIGHT JOIN ')
-        assert expanded.contains('UNION ALL')
-        assert expanded.contains('e."__ginq_present" IS NULL')
-        assert !expanded.toUpperCase(Locale.ROOT).contains('FULL')
-        assert expanded.endsWith('ORDER BY e.name FETCH FIRST ? ROWS ONLY')
-        assert 3 == expanded.count('?')
-
-        def chain = SqlGinqRuntime.prepareMixedSql(
-                'SELECT a.*, b.*, c.* FROM aa a FULL JOIN bb b ON a.id = b.id FULL JOIN cc c ON b.id = c.id',
-                [['id'], ['id'], ['id']],
-                '"' as char)
-        assert 3 == chain.count('UNION ALL')
-        assert chain.contains('a."__ginq_present" IS NULL')
-        assert chain.contains('b."__ginq_present" IS NULL')
     }
 
     @Test

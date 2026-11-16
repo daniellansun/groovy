@@ -37,12 +37,12 @@ import org.apache.groovy.lang.annotation.Incubating
 @CompileStatic
 class MixedPlan {
     final SqlQueryNode fullQuery
-    final SqlQuery prefix
+    final SqlQueryNode prefix
     final List<SqlQuery> columnCountQueries
     final GinqExpression tail
     final int pushedJoins
 
-    private MixedPlan(SqlQueryNode fullQuery, SqlQuery prefix, List<SqlQuery> columnCountQueries,
+    private MixedPlan(SqlQueryNode fullQuery, SqlQueryNode prefix, List<SqlQuery> columnCountQueries,
                       GinqExpression tail, int pushedJoins) {
         this.fullQuery = fullQuery
         this.prefix = prefix
@@ -55,7 +55,7 @@ class MixedPlan {
         return new MixedPlan(fullQuery, null, Collections.<SqlQuery>emptyList(), null, 0)
     }
 
-    static MixedPlan split(SqlQuery prefix, List<SqlQuery> columnCountQueries, GinqExpression tail, int pushedJoins) {
+    static MixedPlan split(SqlQueryNode prefix, List<SqlQuery> columnCountQueries, GinqExpression tail, int pushedJoins) {
         return new MixedPlan(null, prefix, columnCountQueries, tail, pushedJoins)
     }
 }

@@ -1124,11 +1124,26 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
             query.projections << new SqlProjection(new SqlStar(alias))
         }
 
+        List<SqlTableSource> labelSources = [query.from]
+        for (SqlJoin join : query.joins) {
+            labelSources << join.table
+        }
+        boolean emulateFull = !capabilities.supportsFullOuterJoin() && query.joins.any { SqlJoin join ->
+            join.type == SqlJoin.Type.FULL
+        }
+        if (emulateFull && !query.orderBy.every { SqlOrderSpec spec -> spec.expr instanceof SqlColumn }) {
+            query.orderBy.clear()
+            query.offset = null
+            query.fetch = null
+            orderPushed = false
+            limitPushed = false
+        }
+        SqlQueryNode laidOut = aliases.size() > 1 ? MixedSourceLayout.layout(query, aliases, emulateFull) : query
+
         List<SqlQuery> columnCountQueries = []
         if (aliases.size() > 1) {
-            columnCountQueries << countQuery(query.from)
-            for (SqlJoin join : query.joins) {
-                columnCountQueries << countQuery(join.table)
+            for (SqlTableSource source : labelSources) {
+                columnCountQueries << countQuery(source)
             }
         }
 
@@ -1164,7 +1179,7 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
             tail.limitExpression = ginq.limitExpression
         }
         tail.selectExpression = ginq.selectExpression
-        return MixedPlan.split(query, columnCountQueries, tail, pushedJoins)
+        return MixedPlan.split(laidOut, columnCountQueries, tail, pushedJoins)
     }
 
     private static SqlQuery countQuery(SqlTableSource source) {

@@ -105,7 +105,7 @@ class SqlRenderer {
         query.projections.eachWithIndex { SqlProjection projection, int i ->
             if (i > 0) sb.append(', ')
             renderExpr(projection.expr, sb, parameters)
-            if (projection.alias) sb.append(' AS ').append(dialect.identifier(projection.alias))
+            if (projection.alias) sb.append(' AS ').append(dialect.mixedIdentifier(projection.alias))
         }
 
         sb.append(' FROM ')
@@ -167,8 +167,8 @@ class SqlRenderer {
 
     private void renderExpr(SqlExpr expr, StringBuilder sb, List<Expression> parameters) {
         if (expr instanceof SqlColumn) {
-            if (expr.tableAlias) sb.append(dialect.identifier(expr.tableAlias)).append('.')
-            sb.append(dialect.identifier(expr.column))
+            if (expr.tableAlias) sb.append(dialect.mixedIdentifier(expr.tableAlias)).append('.')
+            sb.append(dialect.mixedIdentifier(expr.column))
         } else if (expr instanceof SqlParam) {
             sb.append('?')
             parameters.add(expr.valueExpr)
@@ -291,7 +291,7 @@ class SqlRenderer {
         } else if (expr instanceof SqlCountStar) {
             sb.append('COUNT(*)')
         } else if (expr instanceof SqlStar) {
-            if (expr.tableAlias) sb.append(dialect.identifier(expr.tableAlias)).append('.')
+            if (expr.tableAlias) sb.append(dialect.mixedIdentifier(expr.tableAlias)).append('.')
             sb.append('*')
         } else {
             throw new GroovyBugError("Unknown SQL expression: ${expr?.getClass()?.name}")
@@ -329,12 +329,16 @@ class SqlRenderer {
             renderQualifiedName(tableSource.tableName, sb)
         } else if (tableSource instanceof SqlDerivedTable) {
             sb.append('(')
-            renderQuery(tableSource.query, sb, parameters)
+            if (tableSource.query instanceof SqlQuery) {
+                renderQuery((SqlQuery) tableSource.query, sb, parameters)
+            } else {
+                renderQueryNode(tableSource.query, sb, parameters)
+            }
             sb.append(')')
         } else {
             throw new GroovyBugError("Unknown table source: ${tableSource?.getClass()?.name}")
         }
-        sb.append(' ').append(dialect.identifier(tableSource.alias))
+        sb.append(' ').append(dialect.mixedIdentifier(tableSource.alias))
     }
 
     private void renderOrderItem(SqlOrderSpec orderSpec, StringBuilder sb, List<Expression> parameters) {
