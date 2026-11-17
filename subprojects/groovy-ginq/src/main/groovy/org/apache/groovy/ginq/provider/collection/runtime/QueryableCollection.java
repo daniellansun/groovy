@@ -25,6 +25,7 @@ import groovy.lang.Tuple3;
 import groovy.transform.Internal;
 import org.apache.groovy.internal.util.Supplier;
 import org.codehaus.groovy.runtime.DefaultGroovyMethods;
+import org.codehaus.groovy.runtime.typehandling.GroovyCastException;
 import org.codehaus.groovy.runtime.dgmimpl.NumberNumberMinus;
 import org.codehaus.groovy.runtime.typehandling.NumberMath;
 
@@ -92,6 +93,7 @@ class QueryableCollection<T> implements Queryable<T>, Serializable {
      */
     QueryableCollection(Iterable<T> sourceIterable) {
         this.sourceIterable = sourceIterable;
+        this.sourceListIsUserSupplied = sourceIterable instanceof List;
     }
 
     /**
@@ -104,21 +106,17 @@ class QueryableCollection<T> implements Queryable<T>, Serializable {
     }
 
     /**
-     * Returns an iterator over the current source.
+     * Returns an iterator over the current source. The iterator is created
+     * from {@link #stream()}, so it follows the same re-enumeration rules: a
+     * live iterable is read again, and a one-shot stream is replayed from the
+     * buffer. The read lock is not held around this call; taking it and then
+     * calling {@link #stream()} would deadlock on a lock upgrade.
      *
      * @return an iterator over the elements
      */
+    @Override
     public Iterator<T> iterator() {
-        readLock.lock();
-        try {
-            if (null != sourceIterable) {
-                return sourceIterable.iterator();
-            }
-
-            return sourceStream.iterator();
-        } finally {
-            readLock.unlock();
-        }
+        return stream().iterator();
     }
 
     /**
@@ -930,17 +928,20 @@ class QueryableCollection<T> implements Queryable<T>, Serializable {
         writeLock.lock();
         try {
             if (sourceIterable instanceof @SuppressWarnings("unchecked")List<T> list) {
-                return list;
+                if (sourceListIsUserSupplied) {
+                    return list;
+                }
+                return new ArrayList<>(list);
             }
 
             if (upstreamBound) {
-                return drainOneShot();
+                return new ArrayList<>(drainOneShot());
             }
 
             final List<T> result = openStream().collect(Collectors.toList());
             sourceIterable = result;
 
-            return result;
+            return new ArrayList<>(result);
         } finally {
             writeLock.unlock();
         }
@@ -1121,14 +1122,21 @@ class QueryableCollection<T> implements Queryable<T>, Serializable {
 
     /**
      * Opens the source for pipeline construction. An iterable is streamed again on
-     * every call. A stream-backed source yields its single stream, which the caller
-     * consumes while building the next stage.
+     * every call. After a one-shot source has been bound, this returns a fresh
+     * stream on the public replay path instead of the already-spliterated
+     * {@link #sourceStream}. {@link #stream()} may call this while binding;
+     * the replay route is taken only when {@link #upstream} is already set, so
+     * that bind does not re-enter itself.
      *
-     * @return the source stream, which may be the one-shot stream
+     * @return a stream over the source, which may be a replay stream
      */
     private Stream<T> openStream() {
         writeLock.lock();
         try {
+            if (upstream != null) {
+                return stream();
+            }
+
             if (isReusable()) {
                 sourceStream = toStream(sourceIterable);  // we have to create new stream every time because Java stream can not be reused
             }
@@ -1301,6 +1309,9 @@ class QueryableCollection<T> implements Queryable<T>, Serializable {
      * @return the coerced value
      */
     public Object asType(Class<?> clazz) {
+        if (clazz == null) {
+            throw new GroovyCastException("Cannot cast '" + getClass().getName() + "' to null");
+        }
         if (Queryable.class == clazz || QueryableCollection.class == clazz) {
             return this;
         }
@@ -1387,6 +1398,8 @@ class QueryableCollection<T> implements Queryable<T>, Serializable {
     private final Map<SortedPartitionCacheKey<T>, Partition<Tuple2<T, Long>>> sortedPartitionCache = new ConcurrentHashMap<>(4);
     private Stream<T> sourceStream;
     private volatile Iterable<T> sourceIterable;
+    /** True when {@link #sourceIterable} is a user-supplied {@link List}, which {@link #toList()} may return as-is. */
+    private boolean sourceListIsUserSupplied;
     /** Elements pulled from a one-shot {@link #sourceStream}, in order. */
     private final List<T> replay = new ArrayList<>();
     private transient Spliterator<T> upstream;
