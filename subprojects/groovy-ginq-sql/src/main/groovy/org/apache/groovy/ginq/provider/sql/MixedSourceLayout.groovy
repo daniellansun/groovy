@@ -350,7 +350,7 @@ class MixedSourceLayout {
         }
         if (expr instanceof SqlColumn) {
             SqlColumn column = (SqlColumn) expr
-            if (column.tableAlias != null && aliasNames.contains(column.tableAlias) && column.column != PRESENCE) {
+            if (column.tableAlias != null && aliasNames.contains(column.tableAlias)) {
                 LinkedHashSet<String> columns = usedColumns.get(column.tableAlias)
                 if (columns == null) {
                     columns = new LinkedHashSet<>()
@@ -471,7 +471,7 @@ class MixedSourceLayout {
 
     private List<SqlProjection> directColumns(int index, String alias) {
         List<SqlProjection> projections = []
-        projections.add(new SqlProjection(new SqlColumn(alias, PRESENCE), presenceOut(index)))
+        projections.add(new SqlProjection(new SqlColumn(alias, MARKER), presenceOut(index)))
         Integer probe = starProbesByAlias.get(alias)
         if (probe != null) {
             projections.add(new SqlProjection(new SqlColumn(alias, '__ginqsrc_' + probe)))
@@ -520,7 +520,7 @@ class MixedSourceLayout {
         for (int index : rel.output) {
             SqlExpr column
             if (rel.direct.contains(aliasNames[index])) {
-                column = new SqlColumn(aliasNames[index], userProjections ? PRESENCE : MARKER)
+                column = new SqlColumn(aliasNames[index], MARKER)
             } else {
                 column = new SqlColumn(rel.container, userProjections ? presenceOut(index) : '__ginqabs_' + index)
             }
@@ -698,11 +698,15 @@ class MixedSourceLayout {
         return copy
     }
 
-    private static SqlTableSource wrap(SqlTableSource source) {
+    private SqlTableSource wrap(SqlTableSource source) {
         SqlQuery inner = new SqlQuery()
         inner.from = realias(source, SRC)
         inner.projections.add(new SqlProjection(new SqlStar(SRC)))
-        inner.projections.add(new SqlProjection(new SqlLiteral(1), PRESENCE))
+        // Complete-path SQL is executed as rendered, so the wrap must not
+        // introduce 1 AS "__ginq_present" beside a user column of that name.
+        // The split path still emits PRESENCE and lets prepareMixedSql rename
+        // only the AS definition (and MARKER) when the user label collides.
+        inner.projections.add(new SqlProjection(new SqlLiteral(1), userProjections ? MARKER : PRESENCE))
         return new SqlDerivedTable(inner, source.alias)
     }
 

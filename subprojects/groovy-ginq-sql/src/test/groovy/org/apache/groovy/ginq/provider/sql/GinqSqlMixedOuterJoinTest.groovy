@@ -228,6 +228,26 @@ class GinqSqlMixedOuterJoinTest {
     }
 
     @Test
+    void testCompleteFullJoinKeepsAUserPresenceColumn() {
+        db.execute('create table people (id integer, name varchar(20))')
+        db.execute("insert into people (id, name) values (1, 'Alice'), (7, 'Gina'), (8, 'Hugo')")
+        db.execute('create table marks ("__ginq_present" integer, name varchar(20))')
+        db.execute('insert into marks ("__ginq_present", name) values (7, \'seven\'), (8, \'eight\')')
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def rows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: captured) {
+            from e in 'people'
+            fulljoin m in 'marks' on e.id == m.__ginq_present
+            select e.name as en, m.name as mn, m.__ginq_present as mp
+        }.toList()
+        assertNoNativeFullJoin(captured.sqlText)
+        assert captured.sqlText.contains('1 AS "__ginq_marker"')
+        assert !captured.sqlText.contains('1 AS "__ginq_present"')
+        assert [['Alice', null, null], ['Gina', 'seven', 7], ['Hugo', 'eight', 8]] as Set ==
+                rows.collect { [it.en, it.mn, it.mp] } as Set
+        assert 3 == rows.size()
+    }
+
+    @Test
     void testSeveralUnmatchedAliasesStayIndexAligned() {
         db.execute('create table anchors (id integer, name varchar(20))')
         db.execute("insert into anchors (id, name) values (1, 'one'), (2, 'two')")
