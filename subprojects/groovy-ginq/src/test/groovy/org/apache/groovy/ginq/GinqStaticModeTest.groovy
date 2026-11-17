@@ -710,6 +710,7 @@ final class GinqStaticModeTest {
             }
             assert Example.run() == [[1, 2], [3, 6], [6, 18]]
         '''
+    }
 
     @Test
     void markedMethodPointerInAClauseStaysAGroovyPointer() {
