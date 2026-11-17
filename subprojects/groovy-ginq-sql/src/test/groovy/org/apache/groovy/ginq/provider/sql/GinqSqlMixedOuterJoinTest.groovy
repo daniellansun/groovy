@@ -326,6 +326,85 @@ class GinqSqlMixedOuterJoinTest {
     }
 
     @Test
+    void testCompleteFullJoinCorrelatedExistsProjectsTheOuterColumn() {
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def rows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: captured) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            where (from x in 'employees' where x.name == e.name && x.salary > 4500 select x.id).exists()
+            select e.id as eid, d.name as dn
+        }.toList()
+        assertNoNativeFullJoin(captured.sqlText)
+        assert [4500] == captured.params
+        assert [[1, 'Dev'], [5, 'Sales'], [6, 'Support']] as Set == rows.collect { [it.eid, it.dn] } as Set
+        assert 3 == rows.size()
+    }
+
+    @Test
+    void testCompleteFullJoinInSubqueryProjectsTheOuterColumn() {
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def rows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: captured) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            where e.name in (from x in 'employees' where x.salary > 4500 select x.name)
+            select e.id as eid, d.name as dn
+        }.toList()
+        assertNoNativeFullJoin(captured.sqlText)
+        assert [4500] == captured.params
+        assert [[1, 'Dev'], [5, 'Sales'], [6, 'Support']] as Set == rows.collect { [it.eid, it.dn] } as Set
+        assert 3 == rows.size()
+    }
+
+    @Test
+    void testCompleteFullJoinScalarSubqueryProjectsTheOuterColumn() {
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def rows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: captured) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            select e.name as en, (from x in 'departments' where x.id == e.id select x.name) as xn
+        }.toList()
+        assertNoNativeFullJoin(captured.sqlText)
+        def named = rows.findAll { it.en != null }.collectEntries { [it.en, it.xn] }
+        assert ['Alice': 'Dev', 'Bob': 'Sales', 'Carol': 'Support', 'Dave': null, 'Eve': null, 'Frank': null] == named
+        assert 2 == rows.count { it.en == null && it.xn == null }
+        assert 8 == rows.size()
+    }
+
+    @Test
+    void testCompleteFullJoinSubqueryGroupAndOrderProjectTheOuterColumn() {
+        def ordered = new GinqSqlTranslationTest.CapturingSql(db)
+        def byOrder = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: ordered) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            where (from x in 'employees' where x.id == e.id orderby e.salary select x.id).exists()
+            select e.id as eid, d.name as dn
+        }.toList()
+        assertNoNativeFullJoin(ordered.sqlText)
+        assert [[1, 'Dev'], [2, 'Dev'], [3, 'Sales'], [4, null], [5, 'Sales'], [6, 'Support']] as Set ==
+                byOrder.collect { [it.eid, it.dn] } as Set
+        assert 6 == byOrder.size()
+
+        def grouped = new GinqSqlTranslationTest.CapturingSql(db)
+        def byGroup = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: grouped) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            where (from x in 'employees' where x.salary > 4500 groupby x.name, e.name having count() > 0 select x.name).exists()
+            select e.id as eid, d.name as dn
+        }.toList()
+        assertNoNativeFullJoin(grouped.sqlText)
+        assert [[1, 'Dev'], [2, 'Dev'], [3, 'Sales'], [4, null], [5, 'Sales'], [6, 'Support'], [null, 'Empty'], [null, 'Vacant']] as Set ==
+                byGroup.collect { [it.eid, it.dn] } as Set
+        assert 8 == byGroup.size()
+    }
+
+    private static void assertNoNativeFullJoin(String sql) {
+        def upper = sql.toUpperCase(Locale.ROOT)
+        assert upper.contains('UNION ALL')
+        assert !upper.contains('FULL JOIN')
+        assert !upper.contains('FULL OUTER JOIN')
+    }
+
+    @Test
     void testNestedFullJoinMatchesTheCollectionProvider() {
         db.execute('create table aa (id integer)')
         db.execute('create table bb (id integer)')

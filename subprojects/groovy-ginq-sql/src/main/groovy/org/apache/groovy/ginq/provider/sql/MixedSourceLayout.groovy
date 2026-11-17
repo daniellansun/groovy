@@ -162,6 +162,13 @@ class MixedSourceLayout {
     }
 
     private void collectUsed(SqlQuery query) {
+        collectQuery(query)
+    }
+
+    private void collectQuery(SqlQuery query) {
+        if (query == null) {
+            return
+        }
         for (SqlProjection projection : query.projections) {
             collectExpr(projection.expr)
         }
@@ -219,6 +226,14 @@ class MixedSourceLayout {
             collectExpr(expr.condition)
             collectExpr(expr.thenExpr)
             collectExpr(expr.elseExpr)
+        } else if (expr instanceof SqlScalarQuery) {
+            collectQuery(((SqlScalarQuery) expr).query)
+        } else if (expr instanceof SqlExists) {
+            collectQuery(((SqlExists) expr).query)
+        } else if (expr instanceof SqlInQuery) {
+            SqlInQuery inQuery = (SqlInQuery) expr
+            collectExpr(inQuery.expr)
+            collectQuery(inQuery.query)
         }
     }
 
@@ -479,9 +494,13 @@ class MixedSourceLayout {
             copy.joins.add(new SqlJoin(join.type, join.table, rewriteExpr(join.on, rel, alsoDirect)))
         }
         copy.where = rewriteExpr(query.where, rel, alsoDirect)
-        copy.groupBy.addAll(query.groupBy)
+        for (SqlExpr key : query.groupBy) {
+            copy.groupBy.add(rewriteExpr(key, rel, alsoDirect))
+        }
         copy.having = rewriteExpr(query.having, rel, alsoDirect)
-        copy.orderBy.addAll(query.orderBy)
+        for (SqlOrderSpec spec : query.orderBy) {
+            copy.orderBy.add(new SqlOrderSpec(rewriteExpr(spec.expr, rel, alsoDirect), spec.asc, spec.nullsLast))
+        }
         copy.offset = query.offset
         copy.fetch = query.fetch
         return copy
