@@ -24,6 +24,11 @@ import groovy.transform.EqualsAndHashCode
 import groovy.transform.ToString
 import org.junit.jupiter.api.Test
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import java.util.function.Consumer
 import java.util.stream.Collectors
 import java.util.stream.Stream
 
@@ -1051,6 +1056,310 @@ class QueryableCollectionTest {
         }
         assert results[0] == [1, null, 2, 3]
         assert results[1] == [1, null, 2, 3]
+    }
+
+    // GROOVY-12724
+    // Each cursor of a one-shot source is both a writer, when it appends the
+    // next element, and a reader, when it takes an element another cursor
+    // already appended. The action waits until every cursor has reserved the
+    // same element, so holding the write lock across the action deadlocks.
+    @Test
+    void replayKeepsEachElementOnceAcrossConcurrentReadersAndWriters() {
+        List<Integer> expected = new ArrayList<>()
+        for (int i = 0; i < 16; i++) {
+            if (i % 5 == 0) {
+                expected.add(null)
+            } else {
+                expected.add(i)
+            }
+        }
+        Queryable<Integer> once = from(expected.stream())
+        int parties = 8
+        List<List<Integer>> results = new ArrayList<>()
+        for (int i = 0; i < parties; i++) {
+            results.add(new ArrayList<Integer>())
+        }
+        CyclicBarrier start = new CyclicBarrier(parties)
+        CyclicBarrier step = new CyclicBarrier(parties)
+        AtomicReference<Throwable> failure = new AtomicReference<>()
+        Thread[] threads = new Thread[parties]
+        for (int i = 0; i < parties; i++) {
+            int index = i
+            threads[i] = new Thread(new Runnable() {
+                @Override
+                void run() {
+                    try {
+                        Spliterator<Integer> cursor = once.stream().spliterator()
+                        start.await(5, TimeUnit.SECONDS)
+                        boolean more = true
+                        while (more) {
+                            more = cursor.tryAdvance(new Consumer<Integer>() {
+                                @Override
+                                void accept(Integer item) {
+                                    results[index].add(item)
+                                    step.await(5, TimeUnit.SECONDS)
+                                }
+                            })
+                        }
+                    } catch (Throwable thrown) {
+                        failure.compareAndSet(null, thrown)
+                    }
+                }
+            })
+        }
+        for (Thread thread : threads) {
+            thread.start()
+        }
+        for (Thread thread : threads) {
+            thread.join(10_000)
+            assert !thread.isAlive() : 'reader or writer did not finish'
+        }
+        Throwable thrown = failure.get()
+        if (thrown != null) {
+            throw thrown
+        }
+        for (List<Integer> result : results) {
+            assert result == expected
+        }
+    }
+
+    // GROOVY-12724
+    @Test
+    void replayCallbackReentersTheSameQueryableWithoutDeadlock() {
+        Queryable<Integer> once = from(Stream.of(1, null, 2))
+        List<Integer> expected = [1, null, 2]
+        Spliterator<Integer> cursor = once.stream().spliterator()
+        List<Integer> seen = new ArrayList<>()
+        AtomicReference<List<Integer>> otherResult = new AtomicReference<>()
+        AtomicReference<Throwable> otherFailure = new AtomicReference<>()
+        CountDownLatch otherDone = new CountDownLatch(1)
+        boolean advanced = cursor.tryAdvance(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                seen.add(item)
+                assert once.stream().collect(Collectors.toList()) == expected
+                Thread other = new Thread(new Runnable() {
+                    @Override
+                    void run() {
+                        try {
+                            otherResult.set(once.stream().collect(Collectors.toList()))
+                        } catch (Throwable thrown) {
+                            otherFailure.set(thrown)
+                        } finally {
+                            otherDone.countDown()
+                        }
+                    }
+                })
+                other.setDaemon(true)
+                other.start()
+                assert otherDone.await(5, TimeUnit.SECONDS) : 'write lock held across the user action'
+            }
+        })
+        assert advanced
+        assert otherFailure.get() == null
+        assert otherResult.get() == expected
+        List<Integer> rest = new ArrayList<>()
+        cursor.forEachRemaining(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                rest.add(item)
+            }
+        })
+        assert seen == [1]
+        assert rest == [null, 2]
+    }
+
+    // GROOVY-12724
+    // Cursor policy: tryAdvance reads the element and advances this cursor
+    // under the lock, releases the lock, then runs the action. If the action
+    // throws, this cursor has consumed the element and does not deliver it
+    // again. The element stays in the replay buffer for every other cursor.
+    // The write lock is not held while the action runs, nor after it throws.
+    @Test
+    void replayActionExceptionConsumesTheElementAndKeepsTheBuffer() {
+        Queryable<Integer> once = from(Stream.of(10, 20, 30, 40))
+        List<Integer> expected = [10, 20, 30, 40]
+        Spliterator<Integer> throwing = once.stream().spliterator()
+        Spliterator<Integer> other = once.stream().spliterator()
+        AtomicReference<List<Integer>> during = new AtomicReference<>()
+        AtomicReference<Throwable> duringFailure = new AtomicReference<>()
+        CountDownLatch duringDone = new CountDownLatch(1)
+        try {
+            throwing.tryAdvance(new Consumer<Integer>() {
+                @Override
+                void accept(Integer item) {
+                    assert item == 10
+                    Thread reader = new Thread(new Runnable() {
+                        @Override
+                        void run() {
+                            try {
+                                during.set(once.stream().collect(Collectors.toList()))
+                            } catch (Throwable thrown) {
+                                duringFailure.set(thrown)
+                            } finally {
+                                duringDone.countDown()
+                            }
+                        }
+                    })
+                    reader.setDaemon(true)
+                    reader.start()
+                    assert duringDone.await(5, TimeUnit.SECONDS) : 'write lock held across the user action'
+                    throw new IllegalStateException('consumed ' + item)
+                }
+            })
+            throw new AssertionError('action should have thrown')
+        } catch (IllegalStateException e) {
+            assert e.message == 'consumed 10'
+        }
+        assert duringFailure.get() == null
+        assert during.get() == expected
+
+        CountDownLatch afterDone = new CountDownLatch(1)
+        AtomicReference<List<Integer>> after = new AtomicReference<>()
+        Thread afterReader = new Thread(new Runnable() {
+            @Override
+            void run() {
+                try {
+                    after.set(once.stream().collect(Collectors.toList()))
+                } finally {
+                    afterDone.countDown()
+                }
+            }
+        })
+        afterReader.setDaemon(true)
+        afterReader.start()
+        assert afterDone.await(5, TimeUnit.SECONDS) : 'write lock still held after the action threw'
+        assert after.get() == expected
+
+        List<Integer> throwingRest = new ArrayList<>()
+        throwing.forEachRemaining(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                throwingRest.add(item)
+            }
+        })
+        assert throwingRest == [20, 30, 40]
+
+        List<Integer> otherSeen = new ArrayList<>()
+        other.forEachRemaining(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                otherSeen.add(item)
+            }
+        })
+        assert otherSeen == expected
+    }
+
+    // GROOVY-12724
+    // After another cursor has already pulled elements into the buffer, a
+    // later cursor takes them under the read lock in serveReplayed. The
+    // element is copied and this cursor advances before the lock is released;
+    // the action runs afterwards. A throw mid-stream, after a successful
+    // serveReplayed pull, still consumes that element and leaves it in the
+    // buffer for other cursors. The read lock is not held across the action.
+    @Test
+    void replayServeReplayedActionExceptionConsumesTheElementAndKeepsTheBuffer() {
+        Queryable<Integer> once = from(Stream.of(10, 20, 30, 40))
+        List<Integer> expected = [10, 20, 30, 40]
+        Spliterator<Integer> writer = once.stream().spliterator()
+        assert writer.tryAdvance(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                assert item == 10
+            }
+        })
+        assert writer.tryAdvance(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                assert item == 20
+            }
+        })
+
+        Spliterator<Integer> throwing = once.stream().spliterator()
+        Spliterator<Integer> other = once.stream().spliterator()
+        assert throwing.tryAdvance(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                assert item == 10
+            }
+        })
+
+        AtomicReference<List<Integer>> during = new AtomicReference<>()
+        AtomicReference<Throwable> duringFailure = new AtomicReference<>()
+        CountDownLatch duringDone = new CountDownLatch(1)
+        try {
+            throwing.tryAdvance(new Consumer<Integer>() {
+                @Override
+                void accept(Integer item) {
+                    assert item == 20
+                    Thread reader = new Thread(new Runnable() {
+                        @Override
+                        void run() {
+                            try {
+                                during.set(once.stream().collect(Collectors.toList()))
+                            } catch (Throwable thrown) {
+                                duringFailure.set(thrown)
+                            } finally {
+                                duringDone.countDown()
+                            }
+                        }
+                    })
+                    reader.setDaemon(true)
+                    reader.start()
+                    assert duringDone.await(5, TimeUnit.SECONDS) : 'read lock held across the user action'
+                    throw new IllegalStateException('consumed ' + item)
+                }
+            })
+            throw new AssertionError('action should have thrown')
+        } catch (IllegalStateException e) {
+            assert e.message == 'consumed 20'
+        }
+        assert duringFailure.get() == null
+        assert during.get() == expected
+
+        CountDownLatch afterDone = new CountDownLatch(1)
+        AtomicReference<List<Integer>> after = new AtomicReference<>()
+        Thread afterReader = new Thread(new Runnable() {
+            @Override
+            void run() {
+                try {
+                    after.set(once.stream().collect(Collectors.toList()))
+                } finally {
+                    afterDone.countDown()
+                }
+            }
+        })
+        afterReader.setDaemon(true)
+        afterReader.start()
+        assert afterDone.await(5, TimeUnit.SECONDS) : 'read lock still held after the action threw'
+        assert after.get() == expected
+
+        List<Integer> throwingRest = new ArrayList<>()
+        throwing.forEachRemaining(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                throwingRest.add(item)
+            }
+        })
+        assert throwingRest == [30, 40]
+
+        List<Integer> writerRest = new ArrayList<>()
+        writer.forEachRemaining(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                writerRest.add(item)
+            }
+        })
+        assert writerRest == [30, 40]
+
+        List<Integer> otherSeen = new ArrayList<>()
+        other.forEachRemaining(new Consumer<Integer>() {
+            @Override
+            void accept(Integer item) {
+                otherSeen.add(item)
+            }
+        })
+        assert otherSeen == expected
     }
 
     @ToString
