@@ -74,8 +74,23 @@ public final class Ginq {
     }
 
     /**
-     * Queries {@code source}. The stream is read on the first terminal operation
-     * and later terminals replay that read, because a stream can be read only once.
+     * Queries the boxed elements of a primitive {@code int} array. {@code int[]}
+     * is not a {@code T[]}, so the query's element type is {@code Integer}. The
+     * array is boxed again on each terminal. Other primitive arrays are not
+     * overloaded here.
+     *
+     * @param source the elements
+     * @return a query over the boxed values
+     * @throws NullPointerException when {@code source} is null
+     */
+    public static Query<Integer> from(int[] source) {
+        return GinqQuery.from(source);
+    }
+
+    /**
+     * Queries {@code source}. The first terminal fully drains the stream, and
+     * later terminals replay that read, because a stream can be read only once.
+     * {@code take} and {@code exists} do not leave an unused tail unread.
      *
      * @param source the elements
      * @param <T> the element type

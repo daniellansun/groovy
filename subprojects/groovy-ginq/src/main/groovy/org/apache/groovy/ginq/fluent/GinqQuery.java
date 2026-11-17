@@ -99,7 +99,24 @@ public class GinqQuery<T> implements Query<T> {
     }
 
     /**
-     * Queries {@code source}.
+     * Queries the boxed elements of a primitive {@code int} array. {@code int[]} is
+     * not a {@code T[]}, so the query's element type is {@code Integer}. The array
+     * is boxed again on each terminal, and is not copied when this factory runs.
+     * Other primitive arrays are not overloaded here.
+     *
+     * @param source the elements
+     * @return a query of the boxed values
+     */
+    public static Query<Integer> from(int[] source) {
+        Objects.requireNonNull(source, "source");
+        return new GinqQuery<>(() -> Queryable.from(source), null);
+    }
+
+    /**
+     * Queries {@code source}. The first terminal fully drains the stream into a
+     * buffer; later terminals replay that buffer. {@code take} and {@code exists}
+     * therefore do not leave an unused tail unread. The source is marked read
+     * only after that collect succeeds, so a failed drain can be retried.
      *
      * @param source the elements
      * @param <T> the element type
@@ -115,8 +132,8 @@ public class GinqQuery<T> implements Query<T> {
             public Queryable<T> get() {
                 synchronized (buffered) {
                     if (!read) {
-                        read = true;
                         buffered.addAll(source.collect(Collectors.toList()));
+                        read = true;
                     }
                 }
                 return Queryable.from(buffered);
@@ -273,6 +290,24 @@ public class GinqQuery<T> implements Query<T> {
     }
 
     @Override
+    public <U, K, R> Query<R> join(Query<U> inner,
+                                       Function<? super T, ? extends K> outerKey,
+                                       Function<? super U, ? extends K> innerKey,
+                                       BiFunction<? super T, ? super U, ? extends R> resultSelector) {
+        requireJoinKeys(outerKey, innerKey, resultSelector);
+        return project(() -> materialize().innerHashJoin(queryableOf(inner), outerKey, innerKey), resultSelector);
+    }
+
+    @Override
+    public <U, R> Query<R> join(Query<U> inner,
+                                    BiPredicate<? super T, ? super U> on,
+                                    BiFunction<? super T, ? super U, ? extends R> resultSelector) {
+        Objects.requireNonNull(on, "on");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return project(() -> materialize().innerJoin(queryableOf(inner), on), resultSelector);
+    }
+
+    @Override
     public <U, K, R> Query<R> leftJoin(Iterable<U> inner,
                                        Function<? super T, ? extends K> outerKey,
                                        Function<? super U, ? extends K> innerKey,
@@ -283,6 +318,24 @@ public class GinqQuery<T> implements Query<T> {
 
     @Override
     public <U, R> Query<R> leftJoin(Iterable<U> inner,
+                                    BiPredicate<? super T, ? super U> on,
+                                    BiFunction<? super T, ? super U, ? extends R> resultSelector) {
+        Objects.requireNonNull(on, "on");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return project(() -> materialize().leftJoin(queryableOf(inner), on), resultSelector);
+    }
+
+    @Override
+    public <U, K, R> Query<R> leftJoin(Query<U> inner,
+                                       Function<? super T, ? extends K> outerKey,
+                                       Function<? super U, ? extends K> innerKey,
+                                       BiFunction<? super T, ? super U, ? extends R> resultSelector) {
+        requireJoinKeys(outerKey, innerKey, resultSelector);
+        return project(() -> materialize().leftHashJoin(queryableOf(inner), outerKey, innerKey), resultSelector);
+    }
+
+    @Override
+    public <U, R> Query<R> leftJoin(Query<U> inner,
                                     BiPredicate<? super T, ? super U> on,
                                     BiFunction<? super T, ? super U, ? extends R> resultSelector) {
         Objects.requireNonNull(on, "on");
@@ -309,6 +362,24 @@ public class GinqQuery<T> implements Query<T> {
     }
 
     @Override
+    public <U, K, R> Query<R> rightJoin(Query<U> inner,
+                                       Function<? super T, ? extends K> outerKey,
+                                       Function<? super U, ? extends K> innerKey,
+                                       BiFunction<? super T, ? super U, ? extends R> resultSelector) {
+        requireJoinKeys(outerKey, innerKey, resultSelector);
+        return project(() -> materialize().rightHashJoin(queryableOf(inner), outerKey, innerKey), resultSelector);
+    }
+
+    @Override
+    public <U, R> Query<R> rightJoin(Query<U> inner,
+                                    BiPredicate<? super T, ? super U> on,
+                                    BiFunction<? super T, ? super U, ? extends R> resultSelector) {
+        Objects.requireNonNull(on, "on");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return project(() -> materialize().rightJoin(queryableOf(inner), on), resultSelector);
+    }
+
+    @Override
     public <U, K, R> Query<R> fullJoin(Iterable<U> inner,
                                        Function<? super T, ? extends K> outerKey,
                                        Function<? super U, ? extends K> innerKey,
@@ -327,7 +398,31 @@ public class GinqQuery<T> implements Query<T> {
     }
 
     @Override
+    public <U, K, R> Query<R> fullJoin(Query<U> inner,
+                                       Function<? super T, ? extends K> outerKey,
+                                       Function<? super U, ? extends K> innerKey,
+                                       BiFunction<? super T, ? super U, ? extends R> resultSelector) {
+        requireJoinKeys(outerKey, innerKey, resultSelector);
+        return project(() -> materialize().fullHashJoin(queryableOf(inner), outerKey, innerKey), resultSelector);
+    }
+
+    @Override
+    public <U, R> Query<R> fullJoin(Query<U> inner,
+                                    BiPredicate<? super T, ? super U> on,
+                                    BiFunction<? super T, ? super U, ? extends R> resultSelector) {
+        Objects.requireNonNull(on, "on");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return project(() -> materialize().fullJoin(queryableOf(inner), on), resultSelector);
+    }
+
+    @Override
     public <U, R> Query<R> crossJoin(Iterable<U> inner, BiFunction<? super T, ? super U, ? extends R> resultSelector) {
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return project(() -> materialize().crossJoin(queryableOf(inner)), resultSelector);
+    }
+
+    @Override
+    public <U, R> Query<R> crossJoin(Query<U> inner, BiFunction<? super T, ? super U, ? extends R> resultSelector) {
         Objects.requireNonNull(resultSelector, "resultSelector");
         return project(() -> materialize().crossJoin(queryableOf(inner)), resultSelector);
     }
