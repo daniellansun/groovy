@@ -32,6 +32,7 @@ import java.util.function.Consumer
 import java.util.stream.Collectors
 import java.util.stream.Stream
 
+import static groovy.test.GroovyAssert.shouldFail
 import static org.apache.groovy.ginq.provider.collection.runtime.Queryable.from
 
 @CompileStatic
@@ -41,6 +42,12 @@ class QueryableCollectionTest {
         assert [1, 2, 3] == from(Stream.of(1, 2, 3)).toList()
         assert [1, 2, 3] == from(Arrays.asList(1, 2, 3)).toList()
         assert [1, 2, 3] == from(from(Arrays.asList(1, 2, 3))).toList()
+    }
+
+    @Test
+    void fromIntArrayBoxesToInteger() {
+        int[] nums = [1, 2, 3] as int[]
+        assert from(nums).toList() == [1, 2, 3]
     }
 
     @Test
@@ -1360,6 +1367,129 @@ class QueryableCollectionTest {
             }
         })
         assert otherSeen == expected
+    }
+
+
+    @Test
+    void iteratorThenStreamReplaysAOneShotSource() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3))
+        assert collect(once.iterator()) == [1, 2, 3]
+        assert once.stream().toList() == [1, 2, 3]
+    }
+
+    @Test
+    void streamThenIteratorReplaysAOneShotSource() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3))
+        assert once.stream().toList() == [1, 2, 3]
+        assert collect(once.iterator()) == [1, 2, 3]
+    }
+
+    @Test
+    @CompileDynamic
+    void asIteratorFollowsTheSameReplayRulesAsStream() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3))
+        Iterator<Integer> first = once as Iterator
+        assert first.toList() == [1, 2, 3]
+        assert once.toList() == [1, 2, 3]
+        Iterator<Integer> second = once as Iterator
+        assert second.toList() == [1, 2, 3]
+    }
+
+    @Test
+    @CompileDynamic
+    void groovyForThenASecondTerminalReplaysAOneShotSource() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3))
+        List<Integer> seen = new ArrayList<>()
+        for (n in once) {
+            seen.add(n)
+        }
+        assert seen == [1, 2, 3]
+        assert once.toList() == [1, 2, 3]
+    }
+
+    @Test
+    void iteratorRereadsANonListIterableMutatedBetweenCalls() {
+        List<Integer> data = new ArrayList<>([1, 2, 3])
+        Iterable<Integer> source = new Iterable<Integer>() {
+            @Override
+            Iterator<Integer> iterator() {
+                return data.iterator()
+            }
+        }
+        Queryable<Integer> query = from(source)
+        assert collect(query.iterator()) == [1, 2, 3]
+        data.add(4)
+        assert collect(query.iterator()) == [1, 2, 3, 4]
+    }
+
+    @Test
+    void asTypeNullThrowsGroovyCastException() {
+        Queryable<Integer> query = from([1, 2, 3])
+        def thrown = shouldFail(org.codehaus.groovy.runtime.typehandling.GroovyCastException) {
+            query.asType(null)
+        }
+        assert thrown.message.contains('to null')
+    }
+
+    @Test
+    void toListDoesNotReturnTheLiveInternalReplayBuffer() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3))
+        assert once.stream().toList() == [1, 2, 3]
+        List<Integer> first = once.toList()
+        first.add(99)
+        assert once.toList() == [1, 2, 3]
+        assert once.asType(ArrayList) == [1, 2, 3]
+    }
+
+    @Test
+    void toListDoesNotReturnAListThisQueryableInstalled() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3))
+        List<Integer> first = once.toList()
+        first.add(99)
+        assert once.toList() == [1, 2, 3]
+    }
+
+    @Test
+    void toListReturnsAUserSuppliedListWithoutCopying() {
+        List<Integer> source = new ArrayList<>([1, 2, 3])
+        Queryable<Integer> query = from(source)
+        assert query.toList().is(source)
+        source.add(4)
+        assert query.toList() == [1, 2, 3, 4]
+        assert query.asType(ArrayList).is(source)
+    }
+
+    @Test
+    void whereAfterAPublicStreamStillSeesTheOneShotSource() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3, 4))
+        Iterator<Integer> first = once.stream().iterator()
+        assert first.next() == 1
+        assert once.where(n -> n > 1).toList() == [2, 3, 4]
+        assert once.select((n, rows) -> n).toList() == [1, 2, 3, 4]
+        assert once.limit(2).toList() == [1, 2]
+    }
+
+    @Test
+    void whereAfterIteratorHasConsumedOneElementStillSeesTheOneShotSource() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3, 4))
+        Iterator<Integer> first = once.iterator()
+        assert first.next() == 1
+        assert once.where(n -> true).toList() == [1, 2, 3, 4]
+    }
+
+    @Test
+    void whereAfterTheOneShotSourceIsFullyConsumedStillWorks() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3))
+        assert once.stream().toList() == [1, 2, 3]
+        assert once.where(n -> n > 1).toList() == [2, 3]
+    }
+
+
+
+    private static <E> List<E> collect(Iterator<E> iterator) {
+        List<E> result = new ArrayList<>()
+        iterator.forEachRemaining(result::add)
+        return result
     }
 
     @ToString
