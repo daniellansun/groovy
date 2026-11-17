@@ -722,16 +722,17 @@ final class GinqStaticModeTest {
                     return s + '!'
                 }
                 static List run() {
+                    def rows = ["${'a'}", "${'bc'}"]
                     GQ {
-                        from n in [1, 2]
-                        groupby n
-                        select n, agg(_g.stream().map(r -> r.n).map(Example.&label).findFirst().get())
+                        from s in rows
+                        groupby s.toString()
+                        select s.toString(), agg(_g.stream().map(r -> (Example.&label).call(r.s)).findFirst().get())
                     }.toList()
                 }
             }
-            // A SAM bridge would checkcast the Integer argument to String and throw.
-            // A Groovy method pointer coerces 1 to "1".
-            assert Example.run() == [[1, '1!'], [2, '2!']]
+            // A SAM bridge would checkcast the GString argument to String and throw.
+            // A Groovy method pointer coerces the GString when the pointer is called.
+            assert Example.run().toSet() == [['a', 'a!'], ['bc', 'bc!']] as Set
         '''
     }
 }
