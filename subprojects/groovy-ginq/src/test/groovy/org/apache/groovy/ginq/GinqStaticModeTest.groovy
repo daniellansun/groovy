@@ -710,5 +710,26 @@ final class GinqStaticModeTest {
             }
             assert Example.run() == [[1, 2], [3, 6], [6, 18]]
         '''
+
+    @Test
+    void markedMethodPointerInAClauseStaysAGroovyPointer() {
+        assertScript '''
+            import groovy.transform.CompileStatic
+            @CompileStatic(extensions = 'org.apache.groovy.ginq.MarkQueryPointers')
+            class Example {
+                static String label(String s) {
+                    return s + '!'
+                }
+                static List run() {
+                    GQ {
+                        from n in [1, 2]
+                        select [n].stream().map(Example.&label).findFirst().get()
+                    }.toList()
+                }
+            }
+            // A SAM bridge would checkcast the Integer argument to String and throw.
+            // A Groovy method pointer coerces 1 to "1".
+            assert Example.run() == ['1!', '2!']
+        '''
     }
 }
