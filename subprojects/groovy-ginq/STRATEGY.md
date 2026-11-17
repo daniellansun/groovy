@@ -207,7 +207,12 @@ including null, is `DefaultGroovyMethods.asType`. That method throws
 applies the usual string and collection coercions when it is. `LazyQueryable`
 returns this for `LazyQueryable` and `Queryable` without building the pipeline,
 and otherwise builds it and uses the built query's `asType`. Returning `this`
-for an arbitrary target is not a coercion.
+for an arbitrary target is not a coercion. `QueryableCollection.asType` throws
+`GroovyCastException` for null, the same way. `as Iterator` uses
+`iterator()`, and `as Stream` uses `stream()`. `toList()` and `as ArrayList`
+do not return the live internal replay buffer, or any list this class
+installed as its source; a user-supplied `List` is still returned without
+copying.
 
 ## What stays out of the static compiler
 
@@ -228,9 +233,16 @@ Two sources, two rules.
 * `Ginq.from` on an `Iterable` or array re-reads that source on every terminal.
   `where`, `select`, and the other operators record the work; they do not copy
   the elements. Adding to the list between two `toList()` calls is visible.
-  This is the LINQ-to-Objects rule.
+  This is the LINQ-to-Objects rule. Fluent `Ginq.from` / `GinqQuery.from` of
+  an `int[]` is `Query<Integer>` and re-boxes the array on each terminal, so a
+  later mutation of the array is visible. Other primitive arrays are out of
+  scope for this fluent factory; only `int[]` matches `Queryable.from`.
 * `Ginq.from` on a `Stream` reads that stream on the first terminal and replays
-  the buffered elements after that. A stream cannot be read twice.
+  the buffered elements after that. A stream cannot be read twice. The first
+  terminal fully drains a fluent `Stream` source; `take` and `exists` do not
+  short-circuit the unused tail. The source is marked read only after that
+  collect succeeds. Operators on `QueryableCollection` may still use
+  `openStream()` for pipeline construction.
 * `Queryable.stream()` and a fluent `stream()` return a new stream every time.
   Creating the stream does not pull. A one-shot pipeline is buffered as its
   elements are pulled, and a later `stream()` reads that buffer from the start
@@ -238,10 +250,18 @@ Two sources, two rules.
   pulling, so a projection with a side effect is not run merely because
   `exists` asks for `count`. After the one-shot source has been read to the
   end, later calls stream the buffer. A caller is never handed a stream that
-  has already been consumed.
+  has already been consumed. After bind, `openStream()` also uses this replay
+  path, so `where`, `select`, or `limit` on an instance that already has a
+  public `stream()` or `iterator()` still sees the source.
+* `QueryableCollection.iterator()`, a Groovy `for-in` over the queryable, and
+  `as Iterator` follow the same rules as `stream()`. Each call builds a new
+  iterator from `stream()`; a live non-`List` `Iterable` is read again, and a
+  one-shot stream is replayed. `iterator()` does not hold the read lock.
 * A `GQ` / `QueryableCollection` terminal still materializes once and then
   reuses that list. Building the pipeline does not iterate. That is the
-  behaviour dynamic `GQ` already had.
+  behaviour dynamic `GQ` already had. The list returned by `toList()` is a
+  copy when the elements came from an internal buffer; a user-supplied `List`
+  is returned as-is.
 
 ## Intentional limits
 
@@ -255,3 +275,5 @@ Two sources, two rules.
   attached there.
 * Fluent `orderBy` compares keys with their natural order when the query runs.
   The macro's `orderby` clause is unchanged.
+* `Query` is not `Iterable`. Join, hash-join, and set operators have thin
+  `Query` overloads alongside the `Iterable` forms, matching `union`.

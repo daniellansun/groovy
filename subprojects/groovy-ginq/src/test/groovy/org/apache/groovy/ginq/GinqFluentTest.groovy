@@ -23,6 +23,8 @@ import groovy.ginq.Query
 import groovy.transform.CompileStatic
 import org.junit.jupiter.api.Test
 
+import java.util.stream.Stream
+
 import static groovy.test.GroovyAssert.shouldFail
 
 /**
@@ -128,6 +130,81 @@ final class GinqFluentTest {
             o == null ? 'none' : o.amount.toString()
         }.toList()
         assert labels == ['9', 'none']
+    }
+
+
+    @Test
+    void fromIntArrayIsQueryOfIntegerAndReboxesEachTerminal() {
+        int[] nums = [1, 2, 3] as int[]
+        Query<Integer> query = Ginq.from(nums)
+        assert query.toList() == [1, 2, 3]
+        nums[1] = 9
+        assert query.toList() == [1, 9, 3]
+    }
+
+    @Test
+    void fluentStreamSourceIsFullyDrainedOnTheFirstTerminal() {
+        List<Integer> seen = new ArrayList<>()
+        Query<Integer> query = Ginq.from(Stream.of(1, 2, 3, 4).peek(n -> { seen.add(n); })).take(1)
+        assert query.toList() == [1]
+        assert seen == [1, 2, 3, 4]
+        assert query.toList() == [1]
+
+        List<Integer> existsSeen = new ArrayList<>()
+        assert Ginq.from(Stream.of(5, 6, 7).peek(n -> { existsSeen.add(n); })).exists()
+        assert existsSeen == [5, 6, 7]
+    }
+
+    @Test
+    void fluentStreamSourceIsMarkedReadOnlyAfterASuccessfulCollect() {
+        Stream<Integer> failing = Stream.of(1, 2).map(n -> {
+            if (n == 2) {
+                throw new IllegalStateException('boom')
+            }
+            return n
+        })
+        Query<Integer> query = Ginq.from(failing)
+        def first = shouldFail(IllegalStateException) {
+            query.toList()
+        }
+        assert first.message == 'boom'
+        // The stream has already been operated on, so a retry must still fail
+        // rather than returning the empty buffer that an early read flag would yield.
+        shouldFail {
+            query.toList()
+        }
+    }
+
+    @Test
+    void queryToQueryJoinsCompileStatically() {
+        Query<Person> people = Ginq.from([
+                new Person(1, 'Ann', 20),
+                new Person(2, 'Bob', 15)
+        ])
+        Query<Order> orders = Ginq.from([new Order(1, 5), new Order(1, 7), new Order(3, 4)])
+        List<Integer> inner = people.join(orders) { p -> p.id } { o -> o.personId } { p, o -> o.amount }.orderBy { it }.toList()
+        assert inner == [5, 7]
+
+        List<String> left = people.leftJoin(orders) { p -> p.id } { o -> o.personId } { p, o ->
+            o == null ? 'none' : o.amount.toString()
+        }.toList()
+        assert left.toSet() == ['5', '7', 'none'] as Set
+
+        List<String> right = people.rightJoin(orders) { p -> p.id } { o -> o.personId } { p, o ->
+            p == null ? 'none' : o.amount.toString()
+        }.toList()
+        assert right.toSet() == ['5', '7', 'none'] as Set
+
+        List<String> full = people.fullJoin(orders) { p -> p.id } { o -> o.personId } { p, o ->
+            p == null ? 'none' : (o == null ? p.name : o.amount.toString())
+        }.toList()
+        assert full.toSet() == ['5', '7', 'none', 'Bob'] as Set
+
+        List<Integer> crossed = Ginq.of(1, 2).crossJoin(Ginq.of(10, 20)) { a, b -> a + b }.toList()
+        assert crossed.toSet() == [11, 21, 12, 22] as Set
+
+        List<Integer> pred = people.join(orders) { p, o -> p.id == o.personId } { p, o -> o.amount }.orderBy { it }.toList()
+        assert pred == [5, 7]
     }
 
     static final class Person {

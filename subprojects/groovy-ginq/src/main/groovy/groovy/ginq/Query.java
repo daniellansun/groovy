@@ -358,6 +358,81 @@ public interface Query<T> {
         Objects.requireNonNull(inner, "inner");
         Objects.requireNonNull(on, "on");
         Objects.requireNonNull(resultSelector, "resultSelector");
+
+    /**
+     * Equijoins another query and projects each matching pair. The join is a hash join, so the keys are compared with {@code equals}.
+     *
+     * @param inner the inner query
+     * @param outerKey key from this query
+     * @param innerKey key from {@code inner}
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <K> the key type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    <U, K, R> Query<R> join(Query<U> inner,
+                                Function<? super T, ? extends K> outerKey,
+                                Function<? super U, ? extends K> innerKey,
+                                BiFunction<? super T, ? super U, ? extends R> resultSelector);
+
+    /**
+     * Equijoins another query and projects each matching pair. The join is a hash join, so the keys are compared with {@code equals}. Closure parameters are inferred the same way as the {@code Iterable} form.
+     *
+     * @param inner the inner query
+     * @param outerKey key from this query
+     * @param innerKey key from {@code inner}
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <K> the key type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    default <U, K, R> Query<R> join(Query<U> inner,
+                                        @ClosureParams(value = FromString.class, options = "T") Closure<K> outerKey,
+                                        @ClosureParams(value = FromString.class, options = "U") Closure<K> innerKey,
+                                        @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
+        Objects.requireNonNull(inner, "inner");
+        Objects.requireNonNull(outerKey, "outerKey");
+        Objects.requireNonNull(innerKey, "innerKey");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return join(inner,
+                item -> Query.<K>invoke(outerKey, item),
+                item -> Query.<K>invoke(innerKey, item),
+                (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
+    }
+
+    /**
+     * Inner-joins another query with an arbitrary predicate and projects each matching pair.
+     *
+     * @param inner the inner query
+     * @param on the join predicate
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    <U, R> Query<R> join(Query<U> inner,
+                             BiPredicate<? super T, ? super U> on,
+                             BiFunction<? super T, ? super U, ? extends R> resultSelector);
+
+    /**
+     * Inner-joins another query with an arbitrary predicate and projects each matching pair.
+     * Both closures receive {@code T} and the element type of {@code inner}.
+     *
+     * @param inner the inner query
+     * @param on the join predicate
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    default <U, R> Query<R> join(Query<U> inner,
+                                     @ClosureParams(value = FromString.class, options = "T,U") Closure<?> on,
+                                     @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
+        Objects.requireNonNull(inner, "inner");
+        Objects.requireNonNull(on, "on");
+        Objects.requireNonNull(resultSelector, "resultSelector");
         return join(inner,
                 (outer, joined) -> truth(on, outer, joined),
                 (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
@@ -433,6 +508,81 @@ public interface Query<T> {
      * @return the joined query
      */
     default <U, R> Query<R> leftJoin(Iterable<U> inner,
+                                     @ClosureParams(value = FromString.class, options = "T,U") Closure<?> on,
+                                     @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
+        Objects.requireNonNull(inner, "inner");
+        Objects.requireNonNull(on, "on");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+
+    /**
+     * Equijoins another query from the left. An unmatched outer element is passed with a {@code null} inner element.
+     *
+     * @param inner the inner query
+     * @param outerKey key from this query
+     * @param innerKey key from {@code inner}
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <K> the key type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    <U, K, R> Query<R> leftJoin(Query<U> inner,
+                                Function<? super T, ? extends K> outerKey,
+                                Function<? super U, ? extends K> innerKey,
+                                BiFunction<? super T, ? super U, ? extends R> resultSelector);
+
+    /**
+     * Equijoins another query from the left. An unmatched outer element is passed with a {@code null} inner element. Closure parameters are inferred the same way as the {@code Iterable} form.
+     *
+     * @param inner the inner query
+     * @param outerKey key from this query
+     * @param innerKey key from {@code inner}
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <K> the key type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    default <U, K, R> Query<R> leftJoin(Query<U> inner,
+                                        @ClosureParams(value = FromString.class, options = "T") Closure<K> outerKey,
+                                        @ClosureParams(value = FromString.class, options = "U") Closure<K> innerKey,
+                                        @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
+        Objects.requireNonNull(inner, "inner");
+        Objects.requireNonNull(outerKey, "outerKey");
+        Objects.requireNonNull(innerKey, "innerKey");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return leftJoin(inner,
+                item -> Query.<K>invoke(outerKey, item),
+                item -> Query.<K>invoke(innerKey, item),
+                (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
+    }
+
+    /**
+     * Left-joins another query with an arbitrary predicate.
+     *
+     * @param inner the inner query
+     * @param on the join predicate
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    <U, R> Query<R> leftJoin(Query<U> inner,
+                             BiPredicate<? super T, ? super U> on,
+                             BiFunction<? super T, ? super U, ? extends R> resultSelector);
+
+    /**
+     * Left-joins another query with an arbitrary predicate.
+     * Both closures receive {@code T} and the element type of {@code inner}.
+     *
+     * @param inner the inner query
+     * @param on the join predicate
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    default <U, R> Query<R> leftJoin(Query<U> inner,
                                      @ClosureParams(value = FromString.class, options = "T,U") Closure<?> on,
                                      @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
         Objects.requireNonNull(inner, "inner");
@@ -518,6 +668,81 @@ public interface Query<T> {
         Objects.requireNonNull(inner, "inner");
         Objects.requireNonNull(on, "on");
         Objects.requireNonNull(resultSelector, "resultSelector");
+
+    /**
+     * Equijoins another query from the right. An unmatched inner element is passed with a {@code null} outer element.
+     *
+     * @param inner the inner query
+     * @param outerKey key from this query
+     * @param innerKey key from {@code inner}
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <K> the key type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    <U, K, R> Query<R> rightJoin(Query<U> inner,
+                                Function<? super T, ? extends K> outerKey,
+                                Function<? super U, ? extends K> innerKey,
+                                BiFunction<? super T, ? super U, ? extends R> resultSelector);
+
+    /**
+     * Equijoins another query from the right. An unmatched inner element is passed with a {@code null} outer element. Closure parameters are inferred the same way as the {@code Iterable} form.
+     *
+     * @param inner the inner query
+     * @param outerKey key from this query
+     * @param innerKey key from {@code inner}
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <K> the key type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    default <U, K, R> Query<R> rightJoin(Query<U> inner,
+                                        @ClosureParams(value = FromString.class, options = "T") Closure<K> outerKey,
+                                        @ClosureParams(value = FromString.class, options = "U") Closure<K> innerKey,
+                                        @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
+        Objects.requireNonNull(inner, "inner");
+        Objects.requireNonNull(outerKey, "outerKey");
+        Objects.requireNonNull(innerKey, "innerKey");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return rightJoin(inner,
+                item -> Query.<K>invoke(outerKey, item),
+                item -> Query.<K>invoke(innerKey, item),
+                (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
+    }
+
+    /**
+     * Right-joins another query with an arbitrary predicate.
+     *
+     * @param inner the inner query
+     * @param on the join predicate
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    <U, R> Query<R> rightJoin(Query<U> inner,
+                             BiPredicate<? super T, ? super U> on,
+                             BiFunction<? super T, ? super U, ? extends R> resultSelector);
+
+    /**
+     * Right-joins another query with an arbitrary predicate.
+     * Both closures receive {@code T} and the element type of {@code inner}.
+     *
+     * @param inner the inner query
+     * @param on the join predicate
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    default <U, R> Query<R> rightJoin(Query<U> inner,
+                                     @ClosureParams(value = FromString.class, options = "T,U") Closure<?> on,
+                                     @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
+        Objects.requireNonNull(inner, "inner");
+        Objects.requireNonNull(on, "on");
+        Objects.requireNonNull(resultSelector, "resultSelector");
         return rightJoin(inner,
                 (outer, joined) -> truth(on, outer, joined),
                 (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
@@ -598,6 +823,81 @@ public interface Query<T> {
         Objects.requireNonNull(inner, "inner");
         Objects.requireNonNull(on, "on");
         Objects.requireNonNull(resultSelector, "resultSelector");
+
+    /**
+     * Full equijoin with another query. Unmatched elements on either side are passed with {@code null} for the other element.
+     *
+     * @param inner the inner query
+     * @param outerKey key from this query
+     * @param innerKey key from {@code inner}
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <K> the key type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    <U, K, R> Query<R> fullJoin(Query<U> inner,
+                                Function<? super T, ? extends K> outerKey,
+                                Function<? super U, ? extends K> innerKey,
+                                BiFunction<? super T, ? super U, ? extends R> resultSelector);
+
+    /**
+     * Full equijoin with another query. Unmatched elements on either side are passed with {@code null} for the other element. Closure parameters are inferred the same way as the {@code Iterable} form.
+     *
+     * @param inner the inner query
+     * @param outerKey key from this query
+     * @param innerKey key from {@code inner}
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <K> the key type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    default <U, K, R> Query<R> fullJoin(Query<U> inner,
+                                        @ClosureParams(value = FromString.class, options = "T") Closure<K> outerKey,
+                                        @ClosureParams(value = FromString.class, options = "U") Closure<K> innerKey,
+                                        @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
+        Objects.requireNonNull(inner, "inner");
+        Objects.requireNonNull(outerKey, "outerKey");
+        Objects.requireNonNull(innerKey, "innerKey");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return fullJoin(inner,
+                item -> Query.<K>invoke(outerKey, item),
+                item -> Query.<K>invoke(innerKey, item),
+                (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
+    }
+
+    /**
+     * Full join of another query with an arbitrary predicate.
+     *
+     * @param inner the inner query
+     * @param on the join predicate
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    <U, R> Query<R> fullJoin(Query<U> inner,
+                             BiPredicate<? super T, ? super U> on,
+                             BiFunction<? super T, ? super U, ? extends R> resultSelector);
+
+    /**
+     * Full join of another query with an arbitrary predicate.
+     * Both closures receive {@code T} and the element type of {@code inner}.
+     *
+     * @param inner the inner query
+     * @param on the join predicate
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    default <U, R> Query<R> fullJoin(Query<U> inner,
+                                     @ClosureParams(value = FromString.class, options = "T,U") Closure<?> on,
+                                     @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
+        Objects.requireNonNull(inner, "inner");
+        Objects.requireNonNull(on, "on");
+        Objects.requireNonNull(resultSelector, "resultSelector");
         return fullJoin(inner,
                 (outer, joined) -> truth(on, outer, joined),
                 (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
@@ -624,6 +924,33 @@ public interface Query<T> {
      * @return the joined query
      */
     default <U, R> Query<R> crossJoin(Iterable<U> inner,
+                                      @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
+        Objects.requireNonNull(inner, "inner");
+        Objects.requireNonNull(resultSelector, "resultSelector");
+        return crossJoin(inner, (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
+    }
+
+    /**
+     * Cross-joins another query and projects each pair.
+     *
+     * @param inner the inner query
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    <U, R> Query<R> crossJoin(Query<U> inner, BiFunction<? super T, ? super U, ? extends R> resultSelector);
+
+    /**
+     * Cross-joins another query. The closure parameters are {@code T} and the element type of {@code inner}.
+     *
+     * @param inner the inner query
+     * @param resultSelector the pair projection
+     * @param <U> the inner element type
+     * @param <R> the result element type
+     * @return the joined query
+     */
+    default <U, R> Query<R> crossJoin(Query<U> inner,
                                       @ClosureParams(value = FromString.class, options = "T,U") Closure<R> resultSelector) {
         Objects.requireNonNull(inner, "inner");
         Objects.requireNonNull(resultSelector, "resultSelector");
