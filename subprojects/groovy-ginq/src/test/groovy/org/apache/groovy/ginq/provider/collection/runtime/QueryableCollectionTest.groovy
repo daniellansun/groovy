@@ -1447,7 +1447,45 @@ class QueryableCollectionTest {
         Queryable<Integer> once = from(Stream.of(1, 2, 3))
         List<Integer> first = once.toList()
         first.add(99)
+        List<Integer> second = once.toList()
+        assert second == [1, 2, 3]
+        second.add(88)
         assert once.toList() == [1, 2, 3]
+    }
+
+    @Test
+    void toListAfterAPartialOneShotBindDoesNotReturnTheLiveReplayBuffer() {
+        Queryable<Integer> once = from(Stream.of(1, 2, 3))
+        Iterator<Integer> first = once.iterator()
+        assert first.next() == 1
+        List<Integer> list = once.toList()
+        list.add(99)
+        assert once.toList() == [1, 2, 3]
+        assert once.asType(ArrayList) == [1, 2, 3]
+    }
+
+    @Test
+    void asTypeArrayListCopiesAUserSuppliedLinkedList() {
+        LinkedList<Integer> source = new LinkedList<>([1, 2, 3])
+        Queryable<Integer> query = from(source)
+        assert query.toList().is(source)
+        ArrayList<Integer> copy = (ArrayList<Integer>) query.asType(ArrayList)
+        assert copy instanceof ArrayList
+        assert !copy.is(source)
+        copy.add(99)
+        assert query.toList() == [1, 2, 3]
+        assert source == [1, 2, 3]
+    }
+
+    @Test
+    void toListCopiesAnOwnedList() {
+        List<Integer> owned = new ArrayList<>([1, 2, 3])
+        Queryable<Integer> query = Queryable.fromOwned(owned)
+        List<Integer> first = query.toList()
+        assert !first.is(owned)
+        first.add(99)
+        assert query.toList() == [1, 2, 3]
+        assert owned == [1, 2, 3]
     }
 
     @Test

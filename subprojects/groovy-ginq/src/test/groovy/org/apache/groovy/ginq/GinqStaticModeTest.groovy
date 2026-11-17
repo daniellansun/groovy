@@ -713,7 +713,7 @@ final class GinqStaticModeTest {
     }
 
     @Test
-    void markedMethodPointerInAClauseStaysAGroovyPointer() {
+    void markedMethodReferenceInAClauseStaysAGroovyPointer() {
         assertScript '''
             import groovy.transform.CompileStatic
             @CompileStatic(extensions = 'org.apache.groovy.ginq.MarkQueryPointers')
@@ -726,7 +726,7 @@ final class GinqStaticModeTest {
                     GQ {
                         from s in rows
                         groupby s.toString()
-                        select s.toString(), agg(_g.stream().map(r -> (Example.&label).call(r.s)).findFirst().get())
+                        select s.toString(), agg(_g.stream().map(r -> r.s).map(Example::label).findFirst().get())
                     }.toList()
                 }
             }
