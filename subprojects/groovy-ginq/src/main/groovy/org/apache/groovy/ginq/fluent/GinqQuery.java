@@ -136,7 +136,7 @@ public class GinqQuery<T> implements Query<T> {
                         read = true;
                     }
                 }
-                return Queryable.from(buffered);
+                return Queryable.fromOwned(buffered);
             }
         }, null);
     }
@@ -487,6 +487,7 @@ public class GinqQuery<T> implements Query<T> {
         return materialize().stream();
     }
 
+    @Override
     public Iterator<T> iterator() {
         return toList().iterator();
     }
