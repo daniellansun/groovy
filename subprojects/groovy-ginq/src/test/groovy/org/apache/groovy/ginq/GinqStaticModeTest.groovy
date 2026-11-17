@@ -724,13 +724,14 @@ final class GinqStaticModeTest {
                 static List run() {
                     GQ {
                         from n in [1, 2]
-                        select [n].stream().map(Example.&label).findFirst().get()
+                        groupby n
+                        select n, agg(_g.stream().map(r -> r.n).map(Example.&label).findFirst().get())
                     }.toList()
                 }
             }
             // A SAM bridge would checkcast the Integer argument to String and throw.
             // A Groovy method pointer coerces 1 to "1".
-            assert Example.run() == ['1!', '2!']
+            assert Example.run() == [[1, '1!'], [2, '2!']]
         '''
     }
 }
