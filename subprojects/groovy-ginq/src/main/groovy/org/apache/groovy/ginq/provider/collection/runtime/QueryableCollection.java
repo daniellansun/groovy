@@ -92,8 +92,19 @@ class QueryableCollection<T> implements Queryable<T>, Serializable {
      * @param sourceIterable the source elements
      */
     QueryableCollection(Iterable<T> sourceIterable) {
+        this(sourceIterable, sourceIterable instanceof List);
+    }
+
+    /**
+     * Creates a queryable collection backed by an iterable.
+     *
+     * @param sourceIterable the source elements
+     * @param sourceListIsUserSupplied {@code true} when {@code sourceIterable} is a
+     *        user-supplied {@link List} that {@link #toList()} may return as-is
+     */
+    QueryableCollection(Iterable<T> sourceIterable, boolean sourceListIsUserSupplied) {
         this.sourceIterable = sourceIterable;
-        this.sourceListIsUserSupplied = sourceIterable instanceof List;
+        this.sourceListIsUserSupplied = sourceListIsUserSupplied;
     }
 
     /**

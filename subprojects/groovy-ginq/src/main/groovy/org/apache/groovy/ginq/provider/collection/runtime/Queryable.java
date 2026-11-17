@@ -141,6 +141,22 @@ public interface Queryable<T> {
     }
 
     /**
+     * Factory for a list owned by the queryable, not supplied by the caller.
+     * {@link #toList()} returns a copy, so mutating that result does not change
+     * later terminals or {@code list} itself.
+     *
+     * @param list the owned elements
+     * @param <T> the type of element
+     * @return the {@link Queryable} instance
+     * @since 7.0.0
+     */
+    @GroovyABI(since = "7.0.0")
+    static <T> Queryable<T> fromOwned(List<T> list) {
+        Objects.requireNonNull(list, "list");
+        return new QueryableCollection<>(list, false);
+    }
+
+    /**
      * Inner join another {@link Queryable} instance, similar to SQL's {@code inner join}
      *
      * @param queryable another {@link Queryable} instance
