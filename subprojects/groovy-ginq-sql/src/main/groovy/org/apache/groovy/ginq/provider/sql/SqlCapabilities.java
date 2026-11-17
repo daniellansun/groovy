@@ -57,12 +57,15 @@ public final class SqlCapabilities {
 
     /**
      * Whether the dialect can spell {@code FULL OUTER JOIN}. H2, MySQL and
-     * MariaDB cannot; a mixed-mode full join is then a nested union instead.
+     * MariaDB cannot. An omitted dialect is ANSI, and ANSI does not either:
+     * the engine is unknown, and the nested union is valid both where
+     * {@code FULL OUTER JOIN} exists and where it does not. PostgreSQL,
+     * SQLite and other named dialects keep the native join.
      *
      * @return {@code false} when full joins must be emulated
      */
     public boolean supportsFullOuterJoin() {
-        return !"h2".equals(dialectName) && !"mysql".equals(dialectName);
+        return !"h2".equals(dialectName) && !"mysql".equals(dialectName) && !"ansi".equals(dialectName);
     }
 
     /**

@@ -39,4 +39,12 @@ class SqlQuery implements SqlQueryNode {
     final List<SqlOrderSpec> orderBy = []
     SqlExpr offset
     SqlExpr fetch
+
+    /**
+     * Probes that name the columns of a whole-row projection hidden inside
+     * an emulated full join. Empty when the query has no such projection.
+     * The ids match {@code __ginqsrc_}, {@code __ginqpass_}, {@code __ginqstar_}
+     * and {@code __ginqcol_} in the rendered SQL.
+     */
+    List<SqlQuery> starProbes
 }

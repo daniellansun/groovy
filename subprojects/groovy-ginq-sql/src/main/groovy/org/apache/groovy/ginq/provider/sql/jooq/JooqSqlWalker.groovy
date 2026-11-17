@@ -57,12 +57,17 @@ class JooqSqlWalker extends GinqSqlWalker {
 
     @Override
     protected SqlCapabilities capabilities() {
-        return SqlCapabilities.of(getConfiguration().get(JooqSqlGinqProvider.CONF_DIALECT))
+        return SqlCapabilities.of(effectiveDialectName())
+    }
+
+    @Override
+    protected char identifierQuoteChar() {
+        return JooqRenderer.identifierQuote(effectiveDialectName())
     }
 
     @Override
     protected RenderedSql renderSql(SqlQueryNode queryNode, AbstractGinqExpression expression) {
-        String dialectName = getConfiguration().get(JooqSqlGinqProvider.CONF_DIALECT)
+        String dialectName = effectiveDialectName()
         try {
             return JooqRenderer.render(queryNode, dialectName)
         } catch (NoClassDefFoundError ignore) {

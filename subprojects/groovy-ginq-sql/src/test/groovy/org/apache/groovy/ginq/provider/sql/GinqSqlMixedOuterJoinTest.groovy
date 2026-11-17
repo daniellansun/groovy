@@ -405,6 +405,155 @@ class GinqSqlMixedOuterJoinTest {
     }
 
     @Test
+    void testOmittedDialectFullJoinRunsOnH2() {
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def rows = GQL(provider: 'native-sql', mixedMode: true, dataSource: captured) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            select e.name as en, d.name as dn
+        }.toList()
+        assertNoNativeFullJoin(captured.sqlText)
+        assert rows.any { it.en == 'Dave' && it.dn == null }
+        assert rows.any { it.en == null && it.dn == 'Empty' }
+        assert rows.any { it.en == 'Alice' && it.dn == 'Dev' }
+        assert 8 == rows.size()
+    }
+
+    @Test
+    void testPlanSplitFullJoinSqlHasNoNativeFullJoin() {
+        // The split prefix is executed through JDBC directly. H2 rejects
+        // FULL JOIN, so a successful bag means the prefix was the nested union.
+        def rows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: db) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            select (e == null ? 'missing' : e.name), (d == null ? null : d.name)
+        }.toList()
+        assert rows.any { it[0] == 'missing' && it[1] == 'Empty' }
+        assert rows.any { it[0] == 'Dave' && it[1] == null }
+        assert rows.any { it[0] == 'Alice' && it[1] == 'Dev' }
+    }
+
+    @Test
+    void testCompleteFullJoinWholeRowSelect() {
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def rows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: captured) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            select e, d
+        }.toList()
+        assertNoNativeFullJoin(captured.sqlText)
+        assert rows.every { !it.keySet().any { String key -> key.toLowerCase(Locale.ROOT).contains('present') } }
+        assert rows.any { it.salary == 6000 }
+        assert rows.any { it.salary == 2000 }
+        assert rows.any { it.salary == null && it.name == 'Empty' }
+        assert 8 == rows.size()
+
+        def named = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: db) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            select e.name, d
+        }.toList()
+        def triples = named.collect { it.values().toList() }
+        assert triples.any { it[0] == 'Dave' && it[1] == null }
+        assert triples.any { it[0] == null && it[2] == 'Empty' }
+        assert triples.any { it[0] == 'Alice' && it[2] == 'Dev' }
+        assert triples.every { it.size() == 3 }
+        assert 8 == named.size()
+    }
+
+    @Test
+    void testStrictFullJoinChainRunsOnH2() {
+        db.execute('create table aa (id integer)')
+        db.execute('create table bb (id integer)')
+        db.execute('create table cc (id integer)')
+        db.execute('insert into aa (id) values (1), (2)')
+        db.execute('insert into bb (id) values (1), (3)')
+        db.execute('insert into cc (id) values (3), (4)')
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def full = GQL(provider: 'native-sql', dialect: 'h2', dataSource: captured) {
+            from a in 'aa'
+            fulljoin b in 'bb' on a.id == b.id
+            fulljoin c in 'cc' on b.id == c.id
+            select a.id as aId, b.id as bId, c.id as cId
+        }.toList()
+        assertNoNativeFullJoin(captured.sqlText)
+        assert [[1, 1, null], [2, null, null], [null, 3, 3], [null, null, 4]] as Set ==
+                full.collect { [it.aId, it.bId, it.cId] } as Set
+        assert 4 == full.size()
+
+        def rightCaptured = new GinqSqlTranslationTest.CapturingSql(db)
+        def right = GQL(provider: 'native-sql', dialect: 'h2', dataSource: rightCaptured) {
+            from a in 'aa'
+            fulljoin b in 'bb' on a.id == b.id
+            rightjoin c in 'cc' on b.id == c.id
+            select a.id as aId, b.id as bId, c.id as cId
+        }.toList()
+        assertNoNativeFullJoin(rightCaptured.sqlText)
+        assert [[null, 3, 3], [null, null, 4]] as Set == right.collect { [it.aId, it.bId, it.cId] } as Set
+        assert 2 == right.size()
+    }
+
+    @Test
+    void testFullJoinOnlyInsideSubqueryRunsOnH2() {
+        db.execute('create table nums (id integer)')
+        db.execute('create table aa (id integer)')
+        db.execute('create table bb (id integer)')
+        db.execute('insert into nums (id) values (1), (2), (3)')
+        db.execute('insert into aa (id) values (1), (2)')
+        db.execute('insert into bb (id) values (1), (3)')
+        def mixedExists = new GinqSqlTranslationTest.CapturingSql(db)
+        def existsRows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: mixedExists) {
+            from n in 'nums'
+            where (from a in 'aa' fulljoin b in 'bb' on a.id == b.id where a.id == n.id select a.id).exists()
+            select n.id as id
+        }.toList()
+        assertNoNativeFullJoin(mixedExists.sqlText)
+        assert [1, 2] as Set == existsRows.collect { it.id } as Set
+
+        def mixedIn = new GinqSqlTranslationTest.CapturingSql(db)
+        def inRows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: mixedIn) {
+            from n in 'nums'
+            where n.id in (from a in 'aa' fulljoin b in 'bb' on a.id == b.id select a.id)
+            select n.id as id
+        }.toList()
+        assertNoNativeFullJoin(mixedIn.sqlText)
+        assert [1, 2] as Set == inRows.collect { it.id } as Set
+
+        def mixedScalar = new GinqSqlTranslationTest.CapturingSql(db)
+        def scalarRows = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: mixedScalar) {
+            from n in 'nums'
+            select n.id as id, (from a in 'aa' fulljoin b in 'bb' on a.id == b.id where a.id == n.id select b.id) as bid
+        }.toList()
+        assertNoNativeFullJoin(mixedScalar.sqlText)
+        assert [[1, 1], [2, null], [3, null]] as Set == scalarRows.collect { [it.id, it.bid] } as Set
+
+        def strictExists = new GinqSqlTranslationTest.CapturingSql(db)
+        def strictRows = GQL(provider: 'native-sql', dialect: 'h2', dataSource: strictExists) {
+            from n in 'nums'
+            where (from a in 'aa' fulljoin b in 'bb' on a.id == b.id where a.id == n.id select a.id).exists()
+            select n.id as id
+        }.toList()
+        assertNoNativeFullJoin(strictExists.sqlText)
+        assert [1, 2] as Set == strictRows.collect { it.id } as Set
+
+        def strictIn = new GinqSqlTranslationTest.CapturingSql(db)
+        GQL(provider: 'native-sql', dialect: 'h2', dataSource: strictIn) {
+            from n in 'nums'
+            where n.id in (from a in 'aa' fulljoin b in 'bb' on a.id == b.id select a.id)
+            select n.id as id
+        }
+        assertNoNativeFullJoin(strictIn.sqlText)
+
+        def strictScalar = new GinqSqlTranslationTest.CapturingSql(db)
+        def strictScalarRows = GQL(provider: 'native-sql', dialect: 'h2', dataSource: strictScalar) {
+            from n in 'nums'
+            select n.id as id, (from a in 'aa' fulljoin b in 'bb' on a.id == b.id where a.id == n.id select b.id) as bid
+        }.toList()
+        assertNoNativeFullJoin(strictScalar.sqlText)
+        assert [[1, 1], [2, null], [3, null]] as Set == strictScalarRows.collect { [it.id, it.bid] } as Set
+    }
+
+    @Test
     void testNestedFullJoinMatchesTheCollectionProvider() {
         db.execute('create table aa (id integer)')
         db.execute('create table bb (id integer)')

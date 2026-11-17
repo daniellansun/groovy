@@ -89,6 +89,25 @@ public final class SqlGinqRuntime {
     }
 
     /**
+     * Expands whole-row placeholders left by full-join emulation, then runs
+     * the SQL. {@code __ginqsrc_}, {@code __ginqpass_}, {@code __ginqstar_}
+     * and {@code __ginqcol_} name columns discovered from {@code columnsByAlias}.
+     *
+     * @param dataSource the data source to query
+     * @param sqlText the SQL text with star placeholders
+     * @param params the parameter values in placeholder order
+     * @param columnsByAlias column labels for each whole-row probe, in id order
+     * @param identifierQuote the renderer's identifier quote, one character, or empty
+     * @return the resulting rows
+     * @throws SQLException if the query fails or a placeholder cannot be expanded
+     */
+    public static Queryable<GroovyRowResult> expandAndExecute(Object dataSource, String sqlText, List<Object> params,
+                                                              List<List<String>> columnsByAlias, String identifierQuote) throws SQLException {
+        char quote = quoteChar(identifierQuote);
+        return execute(dataSource, expandStarTokens(sqlText, columnsByAlias, quote), params);
+    }
+
+    /**
      * Returns the number of columns the supplied query produces.
      * The SQL text is a compile-time constant; values are bound as parameters.
      *
@@ -278,7 +297,9 @@ public final class SqlGinqRuntime {
     }
 
     private static boolean prewrapped(String sql) {
-        return sql.contains("__ginq_src") || sql.contains("__ginq_present") || sql.contains("__ginqf");
+        // A user column named __ginq_present is not a wrap. Only the planner's
+        // source alias and full-join container mark SQL that is already wrapped.
+        return sql.contains("__ginq_src") || sql.contains("__ginqf");
     }
 
     private static String substitutePresence(String sql, String presence, char quote) {
@@ -441,30 +462,238 @@ public final class SqlGinqRuntime {
         return any;
     }
 
+    private static final Pattern MIXED_TOKEN = Pattern.compile(
+            "(?i)([\"`\\[]?)__ginq(ref|abs|ord)_(\\d+)(?:_([A-Za-z_][A-Za-z0-9_]*))?");
+
     private static String replaceTokens(String sql, List<List<String>> extended, char quote) throws SQLException {
-        String mark = quote == 0 ? "" : String.valueOf(quote);
-        Pattern token = Pattern.compile(Pattern.quote(mark) + "__ginq(ref|abs|ord)_(\\d+)(?:_([A-Za-z_][A-Za-z0-9_]*))?" + Pattern.quote(mark));
-        Matcher matcher = token.matcher(sql);
+        Matcher matcher = MIXED_TOKEN.matcher(sql);
         StringBuilder out = new StringBuilder();
         int last = 0;
         while (matcher.find()) {
-            int aliasIndex = Integer.parseInt(matcher.group(2));
+            String open = matcher.group(1);
+            int end = matcher.end();
+            char emit = quote;
+            if (open != null && !open.isEmpty()) {
+                char ch = open.charAt(0);
+                char close = ch == '[' ? ']' : ch;
+                if (end >= sql.length() || sql.charAt(end) != close) {
+                    continue;
+                }
+                end++;
+                emit = ch == '[' ? quote : ch;
+            }
+            int aliasIndex = Integer.parseInt(matcher.group(3));
             if (aliasIndex < 0 || aliasIndex >= extended.size()) {
                 throw new SQLException("mixed-mode column reference is outside the alias layout");
             }
             List<String> names = extended.get(aliasIndex);
             int column;
-            if ("abs".equals(matcher.group(1))) {
+            if ("abs".equalsIgnoreCase(matcher.group(2))) {
                 column = names.size() - 1;
             } else {
-                column = columnIndex(names, matcher.group(3));
+                column = columnIndex(names, matcher.group(4));
             }
             out.append(sql, last, matcher.start());
-            out.append(quoteIdentifier("__ginq" + aliasIndex + "_" + column, quote));
-            last = matcher.end();
+            out.append(quoteIdentifier("__ginq" + aliasIndex + "_" + column, emit));
+            last = end;
         }
         out.append(sql, last, sql.length());
         return out.toString();
+    }
+
+    private static String expandStarTokens(String sql, List<List<String>> columnsByAlias, char quote) throws SQLException {
+        StringBuilder out = new StringBuilder();
+        int i = 0;
+        while (i < sql.length()) {
+            int at = nextStarToken(sql, i);
+            if (at < 0) {
+                out.append(sql, i, sql.length());
+                break;
+            }
+            StarToken token = readStarToken(sql, at);
+            if (token == null) {
+                out.append(sql, i, at + 6);
+                i = at + 6;
+                continue;
+            }
+            out.append(sql, i, token.qualifierStart);
+            out.append(expandStar(sql.substring(token.qualifierStart, token.qualifierEnd), token, columnsByAlias, quote));
+            i = token.end;
+        }
+        return out.toString();
+    }
+
+    private static String expandStar(String qualifier, StarToken token, List<List<String>> columnsByAlias, char quote) throws SQLException {
+        if (token.id < 0 || columnsByAlias == null || token.id >= columnsByAlias.size()) {
+            throw new SQLException("whole-row projection is outside the column layout");
+        }
+        List<String> names = columnsByAlias.get(token.id);
+        if (names == null || names.isEmpty()) {
+            throw new SQLException("whole-row source has no columns");
+        }
+        if ("col".equals(token.kind)) {
+            String label = matchLabel(names, token.column);
+            return qualifier + "." + quoteIdentifier(starName(token.id, label), quote);
+        }
+        StringBuilder expanded = new StringBuilder();
+        boolean any = false;
+        for (String label : names) {
+            if (any) {
+                expanded.append(", ");
+            }
+            any = true;
+            String synthetic = quoteIdentifier(starName(token.id, label), quote);
+            if ("src".equals(token.kind)) {
+                expanded.append(qualifier).append('.').append(quoteIdentifier(label, quote));
+                expanded.append(" AS ").append(synthetic);
+            } else if ("pass".equals(token.kind)) {
+                expanded.append(qualifier).append('.').append(synthetic);
+            } else {
+                expanded.append(qualifier).append('.').append(synthetic);
+                expanded.append(" AS ").append(quoteIdentifier(label, quote));
+            }
+        }
+        if (!any) {
+            throw new SQLException("whole-row source has no columns");
+        }
+        return expanded.toString();
+    }
+
+    private static String matchLabel(List<String> names, String column) throws SQLException {
+        if (column == null) {
+            throw new SQLException("mixed-mode column reference is blank");
+        }
+        for (String name : names) {
+            if (name.equalsIgnoreCase(column)) {
+                return name;
+            }
+        }
+        throw new SQLException("mixed-mode join refers to unknown column `" + column + "`");
+    }
+
+    private static String starName(int id, String label) {
+        return "__ginq_" + id + "_" + label;
+    }
+
+    private static int nextStarToken(String sql, int from) {
+        int best = -1;
+        for (String needle : new String[] {"__ginqsrc_", "__ginqpass_", "__ginqstar_", "__ginqcol_"}) {
+            int at = indexOfIgnoreCase(sql, needle, from);
+            if (at >= 0 && (best < 0 || at < best)) {
+                best = at;
+            }
+        }
+        return best;
+    }
+
+    private static int indexOfIgnoreCase(String sql, String needle, int from) {
+        int limit = sql.length() - needle.length();
+        for (int i = from; i <= limit; i++) {
+            if (sql.regionMatches(true, i, needle, 0, needle.length())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static StarToken readStarToken(String sql, int at) {
+        int p = at + 6;
+        String kind = null;
+        if (sql.regionMatches(true, p, "src_", 0, 4)) {
+            kind = "src";
+        } else if (sql.regionMatches(true, p, "pass_", 0, 5)) {
+            kind = "pass";
+        } else if (sql.regionMatches(true, p, "star_", 0, 5)) {
+            kind = "star";
+        } else if (sql.regionMatches(true, p, "col_", 0, 4)) {
+            kind = "col";
+        }
+        if (kind == null) {
+            return null;
+        }
+        p += kind.length() + 1;
+        int idStart = p;
+        while (p < sql.length() && Character.isDigit(sql.charAt(p))) {
+            p++;
+        }
+        if (p == idStart) {
+            return null;
+        }
+        int id = Integer.parseInt(sql.substring(idStart, p));
+        String column = null;
+        if ("col".equals(kind) && p < sql.length() && sql.charAt(p) == '_') {
+            int nameStart = ++p;
+            while (p < sql.length() && isIdent(sql.charAt(p))) {
+                p++;
+            }
+            if (p == nameStart) {
+                return null;
+            }
+            column = sql.substring(nameStart, p);
+        }
+        int tokenStart = at;
+        char open = 0;
+        if (at > 0) {
+            char prev = sql.charAt(at - 1);
+            if (prev == '"' || prev == '`' || prev == '[') {
+                open = prev;
+                tokenStart = at - 1;
+            }
+        }
+        int end = p;
+        if (open != 0) {
+            char close = open == '[' ? ']' : open;
+            if (p >= sql.length() || sql.charAt(p) != close) {
+                return null;
+            }
+            end = p + 1;
+        }
+        int q = tokenStart - 1;
+        while (q >= 0 && Character.isWhitespace(sql.charAt(q))) {
+            q--;
+        }
+        if (q < 0 || sql.charAt(q) != '.') {
+            return null;
+        }
+        q--;
+        while (q >= 0 && Character.isWhitespace(sql.charAt(q))) {
+            q--;
+        }
+        if (q < 0) {
+            return null;
+        }
+        int qualifierEnd = q + 1;
+        int qualifierStart;
+        char mark = sql.charAt(q);
+        if (mark == '"' || mark == '`' || mark == ']') {
+            char opener = mark == ']' ? '[' : mark;
+            qualifierStart = sql.lastIndexOf(opener, q - 1);
+            if (qualifierStart < 0) {
+                return null;
+            }
+        } else {
+            qualifierStart = q;
+            while (qualifierStart > 0 && isIdent(sql.charAt(qualifierStart - 1))) {
+                qualifierStart--;
+            }
+        }
+        StarToken token = new StarToken();
+        token.kind = kind;
+        token.id = id;
+        token.column = column;
+        token.end = end;
+        token.qualifierStart = qualifierStart;
+        token.qualifierEnd = qualifierEnd;
+        return token;
+    }
+
+    private static final class StarToken {
+        String kind;
+        int id;
+        String column;
+        int end;
+        int qualifierStart;
+        int qualifierEnd;
     }
 
     private static int columnIndex(List<String> names, String column) throws SQLException {

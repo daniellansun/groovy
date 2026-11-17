@@ -37,6 +37,33 @@ public final class Dialects {
      */
     public static final String SUPPORTED = "ansi, h2, postgres, mysql, mariadb, sqlite";
 
+    /**
+     * Dialect family named by a JDBC URL, or {@code null} when the URL is
+     * not one of the built-in families.
+     *
+     * @param url a JDBC URL, possibly with leading space
+     * @return {@code h2}, {@code mysql}, {@code postgres}, {@code sqlite}, or {@code null}
+     */
+    public static String fromJdbcUrl(String url) {
+        if (url == null) {
+            return null;
+        }
+        String trimmed = url.trim().toLowerCase(Locale.ROOT);
+        if (trimmed.startsWith("jdbc:h2:")) {
+            return "h2";
+        }
+        if (trimmed.startsWith("jdbc:mysql:") || trimmed.startsWith("jdbc:mariadb:")) {
+            return "mysql";
+        }
+        if (trimmed.startsWith("jdbc:postgresql:")) {
+            return "postgres";
+        }
+        if (trimmed.startsWith("jdbc:sqlite:")) {
+            return "sqlite";
+        }
+        return null;
+    }
+
     private Dialects() {
     }
 

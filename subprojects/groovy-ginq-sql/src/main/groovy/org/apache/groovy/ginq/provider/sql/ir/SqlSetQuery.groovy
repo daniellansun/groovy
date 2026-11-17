@@ -39,6 +39,12 @@ class SqlSetQuery implements SqlQueryNode {
     SqlExpr offset
     SqlExpr fetch
 
+    /**
+     * See {@link SqlQuery#starProbes}. Set on the outermost node when a
+     * nested operand projects a whole row.
+     */
+    List<SqlQuery> starProbes
+
     SqlSetQuery(SqlQueryNode left, SetOp op, SqlQuery right) {
         this.left = left
         this.op = op

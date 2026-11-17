@@ -64,11 +64,15 @@ class MixedSourceLayout {
 
     private final List<String> aliasNames
     private final boolean userProjections
+    private final LayoutContext context
     private final Map<String, LinkedHashSet<String>> usedColumns = new LinkedHashMap<>()
+    private final Map<String, Integer> starProbesByAlias = new LinkedHashMap<>()
+    private List<SqlTableSource> originals = []
 
-    private MixedSourceLayout(List<String> aliasNames, boolean userProjections) {
+    private MixedSourceLayout(List<String> aliasNames, boolean userProjections, LayoutContext context) {
         this.aliasNames = aliasNames
         this.userProjections = userProjections
+        this.context = context
     }
 
     /**
@@ -78,19 +82,28 @@ class MixedSourceLayout {
      * and that union is the left input of the following join.
      */
     static SqlQueryNode layout(SqlQuery query, List<String> aliasNames, boolean emulateFull) {
-        return new MixedSourceLayout(aliasNames, false).apply(query, emulateFull)
+        return new MixedSourceLayout(aliasNames, false, new LayoutContext()).apply(query, emulateFull)
     }
 
     /**
      * Rewrites a fully translated query so a dialect without {@code FULL OUTER JOIN}
-     * still executes it. The outermost select list stays the user's projections;
-     * presence columns exist only inside the emulated unions.
+     * still executes it. Nested queries are rewritten too, including a full join
+     * that lives only inside {@code EXISTS}, {@code IN} or a scalar subquery.
+     * The outermost select list stays the user's projections; presence columns
+     * exist only inside the emulated unions.
      */
     static SqlQueryNode layoutComplete(SqlQueryNode node) {
+        LayoutContext context = new LayoutContext()
+        SqlQueryNode laid = layOut(node, context)
+        attachProbes(laid, context.probes)
+        return laid
+    }
+
+    private static SqlQueryNode layOut(SqlQueryNode node, LayoutContext context) {
         if (node instanceof SqlSetQuery) {
             SqlSetQuery set = (SqlSetQuery) node
-            SqlQueryNode left = layoutComplete(set.left)
-            SqlQuery right = (SqlQuery) layoutComplete(set.right)
+            SqlQueryNode left = layOut(set.left, context)
+            SqlQuery right = (SqlQuery) layOut(set.right, context)
             if (left === set.left && right === set.right) {
                 return set
             }
@@ -101,7 +114,7 @@ class MixedSourceLayout {
             return copy
         }
         SqlQuery query = (SqlQuery) node
-        rewriteNestedSources(query)
+        relayQuery(query, context)
         if (!query.joins.any { SqlJoin join -> join.type == SqlJoin.Type.FULL }) {
             return query
         }
@@ -109,7 +122,7 @@ class MixedSourceLayout {
         for (SqlJoin join : query.joins) {
             names.add(join.table.alias)
         }
-        return new MixedSourceLayout(names, true).completeNest(query)
+        return new MixedSourceLayout(names, true, context).completeNest(query)
     }
 
     private SqlQueryNode apply(SqlQuery query, boolean emulateFull) {
@@ -127,38 +140,179 @@ class MixedSourceLayout {
     }
 
     private SqlQueryNode completeNest(SqlQuery query) {
+        originals = [query.from]
+        for (SqlJoin join : query.joins) {
+            originals.add(join.table)
+        }
+        registerStars(query)
         collectUsed(query)
         return apply(query, true)
     }
 
-    private static boolean rewriteNestedSources(SqlQuery query) {
-        boolean changed = false
+    private static void relayQuery(SqlQuery query, LayoutContext context) {
         if (query.from instanceof SqlDerivedTable) {
             SqlDerivedTable derived = (SqlDerivedTable) query.from
-            SqlQueryNode inner = layoutComplete(derived.query)
+            SqlQueryNode inner = layOut(derived.query, context)
             if (inner !== derived.query) {
                 query.from = new SqlDerivedTable(inner, derived.alias)
-                changed = true
             }
         }
         List<SqlJoin> joins = []
+        boolean joinsChanged = false
         for (SqlJoin join : query.joins) {
-            if (join.table instanceof SqlDerivedTable) {
-                SqlDerivedTable derived = (SqlDerivedTable) join.table
-                SqlQueryNode inner = layoutComplete(derived.query)
+            SqlExpr on = relayExpr(join.on, context)
+            SqlTableSource table = join.table
+            if (table instanceof SqlDerivedTable) {
+                SqlDerivedTable derived = (SqlDerivedTable) table
+                SqlQueryNode inner = layOut(derived.query, context)
                 if (inner !== derived.query) {
-                    joins.add(new SqlJoin(join.type, new SqlDerivedTable(inner, derived.alias), join.on))
-                    changed = true
-                    continue
+                    table = new SqlDerivedTable(inner, derived.alias)
                 }
             }
-            joins.add(join)
+            if (on !== join.on || table !== join.table) {
+                joins.add(new SqlJoin(join.type, table, on))
+                joinsChanged = true
+            } else {
+                joins.add(join)
+            }
         }
-        if (changed) {
+        if (joinsChanged) {
             query.joins.clear()
             query.joins.addAll(joins)
         }
-        return changed
+        for (int i = 0; i < query.projections.size(); i++) {
+            SqlProjection projection = query.projections[i]
+            SqlExpr expr = relayExpr(projection.expr, context)
+            if (expr !== projection.expr) {
+                query.projections.set(i, new SqlProjection(expr, projection.alias))
+            }
+        }
+        query.where = relayExpr(query.where, context)
+        for (int i = 0; i < query.groupBy.size(); i++) {
+            query.groupBy.set(i, relayExpr(query.groupBy[i], context))
+        }
+        query.having = relayExpr(query.having, context)
+        for (int i = 0; i < query.orderBy.size(); i++) {
+            SqlOrderSpec spec = query.orderBy[i]
+            SqlExpr expr = relayExpr(spec.expr, context)
+            if (expr !== spec.expr) {
+                query.orderBy.set(i, new SqlOrderSpec(expr, spec.asc, spec.nullsLast))
+            }
+        }
+    }
+
+    private static SqlExpr relayExpr(SqlExpr expr, LayoutContext context) {
+        if (expr == null) {
+            return null
+        }
+        if (expr instanceof SqlBinary) {
+            SqlExpr left = relayExpr(expr.left, context)
+            SqlExpr right = relayExpr(expr.right, context)
+            return left === expr.left && right === expr.right ? expr : new SqlBinary(expr.op, left, right)
+        }
+        if (expr instanceof SqlUnary) {
+            SqlExpr operand = relayExpr(expr.operand, context)
+            return operand === expr.operand ? expr : new SqlUnary(expr.op, operand)
+        }
+        if (expr instanceof SqlIsNull) {
+            SqlExpr inner = relayExpr(expr.expr, context)
+            return inner === expr.expr ? expr : new SqlIsNull(inner, expr.negated)
+        }
+        if (expr instanceof SqlIn) {
+            SqlExpr inner = relayExpr(expr.expr, context)
+            List<SqlExpr> values = relayList(expr.values, context)
+            return inner === expr.expr && values === expr.values ? expr : new SqlIn(inner, values, expr.negated)
+        }
+        if (expr instanceof SqlLike) {
+            SqlExpr value = relayExpr(expr.expr, context)
+            SqlExpr pattern = relayExpr(expr.pattern, context)
+            return value === expr.expr && pattern === expr.pattern ? expr : new SqlLike(value, pattern)
+        }
+        if (expr instanceof SqlFunction) {
+            List<SqlExpr> args = relayList(expr.args, context)
+            return args === expr.args ? expr : new SqlFunction(expr.name, args, expr.distinct)
+        }
+        if (expr instanceof SqlCast) {
+            SqlExpr inner = relayExpr(expr.expr, context)
+            return inner === expr.expr ? expr : new SqlCast(inner, expr.sqlType)
+        }
+        if (expr instanceof SqlCaseWhen) {
+            SqlExpr condition = relayExpr(expr.condition, context)
+            SqlExpr thenExpr = relayExpr(expr.thenExpr, context)
+            SqlExpr elseExpr = relayExpr(expr.elseExpr, context)
+            return condition === expr.condition && thenExpr === expr.thenExpr && elseExpr === expr.elseExpr
+                    ? expr : new SqlCaseWhen(condition, thenExpr, elseExpr)
+        }
+        if (expr instanceof SqlScalarQuery) {
+            SqlQuery laid = (SqlQuery) layOut(expr.query, context)
+            return laid === expr.query ? expr : new SqlScalarQuery(laid)
+        }
+        if (expr instanceof SqlExists) {
+            SqlQuery laid = (SqlQuery) layOut(expr.query, context)
+            return laid === expr.query ? expr : new SqlExists(laid)
+        }
+        if (expr instanceof SqlInQuery) {
+            SqlExpr inner = relayExpr(expr.expr, context)
+            SqlQuery laid = (SqlQuery) layOut(expr.query, context)
+            return inner === expr.expr && laid === expr.query ? expr : new SqlInQuery(inner, laid, expr.negated)
+        }
+        return expr
+    }
+
+    private static List<SqlExpr> relayList(List<SqlExpr> exprs, LayoutContext context) {
+        List<SqlExpr> copy = null
+        for (int i = 0; i < exprs.size(); i++) {
+            SqlExpr relayed = relayExpr(exprs[i], context)
+            if (copy == null && relayed !== exprs[i]) {
+                copy = new ArrayList<>(exprs.subList(0, i))
+            }
+            if (copy != null) {
+                copy.add(relayed)
+            }
+        }
+        return copy == null ? exprs : copy
+    }
+
+    private static void attachProbes(SqlQueryNode node, List<SqlQuery> probes) {
+        if (probes.isEmpty()) {
+            return
+        }
+        List<SqlQuery> copy = new ArrayList<>(probes)
+        if (node instanceof SqlQuery) {
+            ((SqlQuery) node).starProbes = copy
+        } else if (node instanceof SqlSetQuery) {
+            ((SqlSetQuery) node).starProbes = copy
+        }
+    }
+
+    private void registerStars(SqlQuery query) {
+        for (SqlProjection projection : query.projections) {
+            if (!(projection.expr instanceof SqlStar)) {
+                continue
+            }
+            String alias = ((SqlStar) projection.expr).tableAlias
+            if (alias == null || !aliasNames.contains(alias) || starProbesByAlias.containsKey(alias)) {
+                continue
+            }
+            int index = aliasNames.indexOf(alias)
+            int id = context.probes.size()
+            context.probes.add(countQuery(originals[index]))
+            starProbesByAlias.put(alias, id)
+        }
+    }
+
+    private static SqlQuery countQuery(SqlTableSource source) {
+        SqlQuery query = new SqlQuery()
+        query.projections.add(new SqlProjection(new SqlStar()))
+        if (source instanceof SqlTableRef) {
+            query.from = new SqlTableRef(source.tableName, source.alias)
+        } else if (source instanceof SqlDerivedTable) {
+            query.from = new SqlDerivedTable(source.query, source.alias)
+        } else {
+            throw new GroovyBugError('unknown mixed-mode source ' + source.getClass().name)
+        }
+        query.where = new SqlBinary('=', new SqlLiteral(1), new SqlLiteral(0))
+        return query
     }
 
     private void collectUsed(SqlQuery query) {
@@ -313,6 +467,11 @@ class MixedSourceLayout {
     private List<SqlProjection> directColumns(int index, String alias) {
         List<SqlProjection> projections = []
         projections.add(new SqlProjection(new SqlColumn(alias, PRESENCE), presenceOut(index)))
+        Integer probe = starProbesByAlias.get(alias)
+        if (probe != null) {
+            projections.add(new SqlProjection(new SqlColumn(alias, '__ginqsrc_' + probe)))
+            return projections
+        }
         LinkedHashSet<String> columns = usedColumns.get(alias)
         if (columns != null) {
             for (String column : columns) {
@@ -329,6 +488,11 @@ class MixedSourceLayout {
         }
         List<SqlProjection> projections = []
         projections.add(new SqlProjection(new SqlColumn(rel.container, presenceOut(index)), presenceOut(index)))
+        Integer probe = starProbesByAlias.get(alias)
+        if (probe != null) {
+            projections.add(new SqlProjection(new SqlColumn(rel.container, '__ginqpass_' + probe)))
+            return projections
+        }
         LinkedHashSet<String> columns = usedColumns.get(alias)
         if (columns != null) {
             for (String column : columns) {
@@ -428,6 +592,13 @@ class MixedSourceLayout {
         }
         if (expr instanceof SqlColumn) {
             SqlColumn column = (SqlColumn) expr
+            if (column.column != null && (column.column.startsWith('__ginqsrc_')
+                    || column.column.startsWith('__ginqpass_')
+                    || column.column.startsWith('__ginqstar_')
+                    || column.column.startsWith('__ginqcol_')
+                    || (column.tableAlias != null && column.tableAlias.startsWith('__ginq')))) {
+                return column
+            }
             if (column.tableAlias == null || column.tableAlias == alsoDirect
                     || rel.direct.contains(column.tableAlias) || column.tableAlias == rel.container) {
                 return column
@@ -436,8 +607,20 @@ class MixedSourceLayout {
             if (index < 0) {
                 return column
             }
+            Integer probe = starProbesByAlias.get(column.tableAlias)
+            if (userProjections && probe != null) {
+                return new SqlColumn(rel.container, '__ginqcol_' + probe + '_' + column.column)
+            }
             String exposed = userProjections ? columnOut(index, column.column) : '__ginqref_' + index + '_' + column.column
             return new SqlColumn(rel.container, exposed)
+        }
+        if (expr instanceof SqlStar) {
+            String alias = ((SqlStar) expr).tableAlias
+            Integer probe = alias == null ? null : starProbesByAlias.get(alias)
+            if (!userProjections || probe == null || rel.direct.contains(alias)) {
+                return expr
+            }
+            return new SqlColumn(rel.container, '__ginqstar_' + probe)
         }
         if (expr instanceof SqlBinary) {
             return new SqlBinary(expr.op, rewriteExpr(expr.left, rel, alsoDirect), rewriteExpr(expr.right, rel, alsoDirect))
@@ -530,5 +713,9 @@ class MixedSourceLayout {
         final List<String> direct = []
         final List<Integer> output = []
         String container
+    }
+
+    private static final class LayoutContext {
+        final List<SqlQuery> probes = []
     }
 }

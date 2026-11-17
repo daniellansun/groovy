@@ -22,6 +22,10 @@ import groovy.sql.GroovyRowResult
 import groovy.sql.Sql
 import org.apache.groovy.ginq.provider.sql.render.Dialects
 import org.apache.groovy.ginq.provider.sql.runtime.SqlGinqRuntime
+import org.codehaus.groovy.ast.expr.ArgumentListExpression
+import org.codehaus.groovy.ast.expr.ConstantExpression
+import org.codehaus.groovy.ast.expr.MethodCallExpression
+import org.codehaus.groovy.ast.expr.VariableExpression
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -151,6 +155,37 @@ class GinqSqlSemanticsTest {
                 '"' as char)
         assert collision.contains('1 AS "__ginq_present_1"')
         assert !collision.contains('1 AS "__ginq_present"')
+
+        def userColumn = SqlGinqRuntime.prepareMixedSql(
+                'SELECT e.*, d.* FROM employees e JOIN departments d ON e.__ginq_present = d.id',
+                [['id'], ['id']],
+                '"' as char)
+        assert userColumn.contains('__ginq_src')
+        assert userColumn.contains('e.__ginq_present = d.id')
+
+        def mysqlTokens = SqlGinqRuntime.prepareMixedSql(
+                'SELECT `__ginqf0_2`.`__ginqref_0_id`, `__ginqf0_2`.`__ginqabs_1`, `__ginqf0_2`.`__ginqord_0_name` FROM `__ginqf0_2`',
+                [['id', 'name'], ['id']],
+                '"' as char)
+        assert !mysqlTokens.contains('__ginqref_')
+        assert !mysqlTokens.contains('__ginqabs_')
+        assert !mysqlTokens.contains('__ginqord_')
+        assert mysqlTokens.contains('`__ginq0_0`')
+        assert mysqlTokens.contains('`__ginq0_1`')
+        assert mysqlTokens.contains('`__ginq1_')
+    }
+
+    @Test
+    void testJdbcUrlSelectsTheDialect() {
+        assert 'h2' == Dialects.fromJdbcUrl('jdbc:h2:mem:ginq')
+        assert 'mysql' == Dialects.fromJdbcUrl('jdbc:mariadb://localhost/db')
+        assert 'postgres' == Dialects.fromJdbcUrl('jdbc:postgresql://localhost/db')
+        assert null == Dialects.fromJdbcUrl('jdbc:oracle:thin:@localhost:1521:orcl')
+        assert 'h2' == GinqSqlWalker.jdbcDialect(new ConstantExpression('jdbc:h2:mem:ginq'))
+        assert null == GinqSqlWalker.jdbcDialect(new VariableExpression('db'))
+        def call = new MethodCallExpression(new VariableExpression('Sql'), 'newInstance',
+                new ArgumentListExpression(new ConstantExpression('jdbc:mysql://localhost/db')))
+        assert 'mysql' == GinqSqlWalker.jdbcDialect(call)
     }
 
     @Test

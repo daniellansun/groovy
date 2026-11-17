@@ -98,6 +98,19 @@ class JooqRenderer {
         return new JooqRenderer(resolveDialect(dialectName)).doRender(queryNode)
     }
 
+    /**
+     * Identifier quote jOOQ uses for {@code __ginq} names in this dialect.
+     * MySQL and MariaDB use a backtick; the other dialects use a double quote.
+     */
+    static char identifierQuote(String dialectName) {
+        SQLDialect resolved = resolveDialect(dialectName)
+        SQLDialect family = resolved.family()
+        if (SQLDialect.MYSQL == family || SQLDialect.MARIADB == family) {
+            return '`' as char
+        }
+        return '"' as char
+    }
+
     private static SQLDialect resolveDialect(String dialectName) {
         if (!dialectName) return SQLDialect.DEFAULT
         try {

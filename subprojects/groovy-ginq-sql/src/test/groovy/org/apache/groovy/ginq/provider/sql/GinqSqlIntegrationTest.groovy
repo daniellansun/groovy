@@ -417,6 +417,28 @@ class GinqSqlIntegrationTest {
     }
 
     @Test
+    void testComputedInSubquery() {
+        // Parentheses close the where argument, so `in (subquery)` is outside it.
+        def captured = new GinqSqlTranslationTest.CapturingSql(db)
+        def added = GQL(provider: 'native-sql', dataSource: captured) {
+            from e in 'employees'
+            where (e.salary + 1) in (from x in 'employees' where x.name == 'Alice' select x.salary + 1)
+            orderby e.name
+            select e.name
+        }
+        assert captured.sqlText.toUpperCase(Locale.ROOT).contains(' IN (')
+        assert ['Alice', 'Eve'] == added.collect { it.name }
+
+        def parenthesized = GQL(provider: 'native-sql', dataSource: db) {
+            from e in 'employees'
+            where (e.name) in (from x in 'employees' where x.salary > 4500 select x.name)
+            orderby e.name
+            select e.name
+        }
+        assert ['Alice', 'Eve', 'Frank'] == parenthesized.collect { it.name }
+    }
+
+    @Test
     void testNotInSubquery() {
         def result = GQL(provider: 'native-sql', dataSource: db) {
             from e in 'employees'

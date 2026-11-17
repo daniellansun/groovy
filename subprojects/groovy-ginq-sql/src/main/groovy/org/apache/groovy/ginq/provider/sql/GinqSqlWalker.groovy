@@ -19,6 +19,7 @@
 package org.apache.groovy.ginq.provider.sql
 
 import groovy.transform.CompileStatic
+import groovy.transform.PackageScope
 import org.apache.groovy.ginq.GinqGroovyMethods
 import org.apache.groovy.ginq.dsl.GinqAstVisitor
 import org.apache.groovy.ginq.dsl.GinqSyntaxError
@@ -41,6 +42,7 @@ import org.apache.groovy.ginq.dsl.expression.WhereExpression
 import org.apache.groovy.ginq.provider.collection.GinqAstWalker
 import org.apache.groovy.ginq.provider.sql.ir.SqlQuery
 import org.apache.groovy.ginq.provider.sql.ir.SqlQueryNode
+import org.apache.groovy.ginq.provider.sql.ir.SqlSetQuery
 import org.apache.groovy.ginq.provider.sql.render.AnsiDialect
 import org.apache.groovy.ginq.provider.sql.render.Dialect
 import org.apache.groovy.ginq.provider.sql.render.Dialects
@@ -52,9 +54,12 @@ import org.codehaus.groovy.GroovyBugError
 import org.codehaus.groovy.ast.ASTNode
 import org.codehaus.groovy.ast.ClassHelper
 import org.codehaus.groovy.ast.ClassNode
+import org.codehaus.groovy.ast.expr.BinaryExpression
 import org.codehaus.groovy.ast.expr.ClosureExpression
 import org.codehaus.groovy.ast.expr.ConstantExpression
+import org.codehaus.groovy.ast.expr.ConstructorCallExpression
 import org.codehaus.groovy.ast.expr.Expression
+import org.codehaus.groovy.ast.expr.GStringExpression
 import org.codehaus.groovy.ast.expr.ExpressionTransformer
 import org.codehaus.groovy.ast.expr.ListExpression
 import org.codehaus.groovy.ast.expr.MethodCallExpression
@@ -128,11 +133,14 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
         if (queryNode == null || sourceUnit.errorCollector.hasErrors()) {
             return constX(null)
         }
+        if (!capabilities().supportsFullOuterJoin()) {
+            queryNode = MixedSourceLayout.layoutComplete(queryNode)
+        }
         RenderedSql renderedSql = renderSql(queryNode, expression)
         if (renderedSql == null) {
             return constX(null)
         }
-        return executeExpression(renderedSql, dataSourceExpr, expression)
+        return executeExpression(renderedSql, dataSourceExpr, expression, queryNode)
     }
 
     private Expression visitMixed(AbstractGinqExpression expression, Expression dataSourceExpr) {
@@ -146,7 +154,7 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
             if (renderedSql == null) {
                 return constX(null)
             }
-            return executeExpression(renderedSql, dataSourceExpr, expression)
+            return executeExpression(renderedSql, dataSourceExpr, expression, plan.fullQuery)
         }
         return emitMixed(plan, expression, dataSourceExpr)
     }
@@ -186,7 +194,7 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
                 constX(prefixSql.sql),
                 new ListExpression(prefixSql.parameters),
                 new ListExpression(layouts),
-                constX(String.valueOf(dialect.identifierQuote()))))
+                constX(String.valueOf(identifierQuoteChar()))))
         tail.fromExpression.dataSourceExpr = callX(rowsVar, 'get', constX(0))
         for (int i = 0; i < plan.pushedJoins; i++) {
             tail.joinExpressionList[i].dataSourceExpr = callX(rowsVar, 'get', constX(i + 1))
@@ -211,13 +219,51 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
         return (Expression) walker.visit(tail)
     }
 
-    private MethodCallExpression executeExpression(RenderedSql renderedSql, Expression dataSourceExpr, AbstractGinqExpression expression) {
-        MethodCallExpression executeCall = callX(
-                classX(SQL_GINQ_RUNTIME_TYPE),
-                'execute',
-                args(dataSourceExpr, constX(renderedSql.sql), new ListExpression(renderedSql.parameters)))
+    private Expression executeExpression(RenderedSql renderedSql, Expression dataSourceExpr,
+                                         AbstractGinqExpression expression, SqlQueryNode queryNode = null) {
+        List<SqlQuery> probes = starProbes(queryNode)
+        Expression executeCall
+        if (probes == null || probes.isEmpty()) {
+            executeCall = callX(
+                    classX(SQL_GINQ_RUNTIME_TYPE),
+                    'execute',
+                    args(dataSourceExpr, constX(renderedSql.sql), new ListExpression(renderedSql.parameters)))
+        } else {
+            List<Expression> layouts = []
+            for (SqlQuery probe : probes) {
+                RenderedSql renderedProbe = renderSql(probe, expression)
+                if (renderedProbe == null) {
+                    return constX(null)
+                }
+                layouts.add(callX(classX(SQL_GINQ_RUNTIME_TYPE), 'columnLabels',
+                        args(dataSourceExpr, constX(renderedProbe.sql), new ListExpression(renderedProbe.parameters))))
+            }
+            executeCall = callX(
+                    classX(SQL_GINQ_RUNTIME_TYPE),
+                    'expandAndExecute',
+                    args(dataSourceExpr, constX(renderedSql.sql), new ListExpression(renderedSql.parameters),
+                            new ListExpression(layouts), constX(String.valueOf(identifierQuoteChar()))))
+        }
         executeCall.setSourcePosition(expression)
         return executeCall
+    }
+
+    private static List<SqlQuery> starProbes(SqlQueryNode queryNode) {
+        if (queryNode instanceof SqlQuery) {
+            return ((SqlQuery) queryNode).starProbes
+        }
+        if (queryNode instanceof SqlSetQuery) {
+            return ((SqlSetQuery) queryNode).starProbes
+        }
+        return null
+    }
+
+    /**
+     * Quote character the renderer uses for synthetic {@code __ginq} names.
+     * jOOQ overrides this; MySQL and MariaDB use a backtick.
+     */
+    protected char identifierQuoteChar() {
+        return dialect.identifierQuote()
     }
 
     private boolean isMixedMode() {
@@ -235,7 +281,7 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
      * Validates provider-specific options.
      */
     protected void validateOptions(AbstractGinqExpression expression) {
-        String dialectName = configuration.get(NativeSqlGinqProvider.CONF_DIALECT)
+        String dialectName = effectiveDialectName()
         if (dialectName != null) {
             Dialect resolved = Dialects.resolve(dialectName)
             if (resolved == null) {
@@ -246,6 +292,67 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
             }
         }
         validateMixedMode(expression)
+    }
+
+    /**
+     * The configured dialect, or the family named by a JDBC URL visible on
+     * the data-source expression. A variable data source stays unspecified
+     * and full joins are then emulated rather than spelled as
+     * {@code FULL OUTER JOIN}.
+     */
+    protected String effectiveDialectName() {
+        String configured = configuration.get(NativeSqlGinqProvider.CONF_DIALECT)
+        if (configured != null && !configured.isEmpty()) {
+            return configured
+        }
+        return jdbcDialect(configurationExpressions.get(GinqGroovyMethods.CONF_DATA_SOURCE))
+    }
+
+    /**
+     * Dialect family named by a JDBC URL somewhere in {@code expression},
+     * or null when no such URL is visible at compile time.
+     */
+    @PackageScope
+    static String jdbcDialect(Expression expression) {
+        if (expression == null) {
+            return null
+        }
+        if (expression instanceof ConstantExpression && ((ConstantExpression) expression).value instanceof String) {
+            return Dialects.fromJdbcUrl((String) ((ConstantExpression) expression).value)
+        }
+        if (expression instanceof MethodCallExpression) {
+            MethodCallExpression call = (MethodCallExpression) expression
+            String found = jdbcDialect(call.objectExpression)
+            if (found != null) {
+                return found
+            }
+            return jdbcDialect(call.arguments)
+        }
+        if (expression instanceof ConstructorCallExpression) {
+            return jdbcDialect(((ConstructorCallExpression) expression).arguments)
+        }
+        if (expression instanceof TupleExpression) {
+            for (Expression argument : ((TupleExpression) expression).expressions) {
+                String found = jdbcDialect(argument)
+                if (found != null) {
+                    return found
+                }
+            }
+        }
+        if (expression instanceof BinaryExpression) {
+            BinaryExpression binary = (BinaryExpression) expression
+            String found = jdbcDialect(binary.leftExpression)
+            return found != null ? found : jdbcDialect(binary.rightExpression)
+        }
+        if (expression instanceof GStringExpression) {
+            for (Expression value : ((GStringExpression) expression).values) {
+                String found = jdbcDialect(value)
+                if (found != null) {
+                    return found
+                }
+            }
+        }
+        return null
     }
 
     /**
@@ -280,7 +387,7 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
      * {@link SqlCapabilities}.
      */
     protected SqlCapabilities capabilities() {
-        return SqlCapabilities.of(configuration.get(NativeSqlGinqProvider.CONF_DIALECT))
+        return SqlCapabilities.of(effectiveDialectName())
     }
 
     @Override

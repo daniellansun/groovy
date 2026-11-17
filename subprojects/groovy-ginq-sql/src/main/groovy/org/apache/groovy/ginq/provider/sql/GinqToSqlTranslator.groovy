@@ -466,6 +466,7 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
     }
 
     private SqlExpr translateExpr(Expression expr) {
+        expr = unwrapGrouping(expr)
         if (expr instanceof GinqExpression) {
             return new SqlScalarQuery(correlatedSubQuery(expr))
         }
@@ -518,8 +519,14 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
         switch (op) {
             case 'in':
             case '!in':
+                left = unwrapGrouping(left)
+                right = unwrapGrouping(right)
                 if (right instanceof GinqExpression) {
-                    return new SqlInQuery(translateExpr(left), correlatedSubQuery(right), '!in' == op)
+                    SqlExpr lhs = translateExpr(left)
+                    if (lhs == null) {
+                        return null
+                    }
+                    return new SqlInQuery(lhs, correlatedSubQuery((GinqExpression) right), '!in' == op)
                 }
                 if (right instanceof RangeExpression) {
                     return translateRangeMember(left, (RangeExpression) right, '!in' == op, expr)
@@ -1245,6 +1252,15 @@ class GinqToSqlTranslator implements SyntaxErrorReportable {
             if (!simpleIdentifier(part)) return false
         }
         return true
+    }
+
+    // Parentheses are a one-element tuple. Leaving them wrapped makes
+    // `(e.salary + 1) in (subquery)` fail to see the subquery.
+    private static Expression unwrapGrouping(Expression expr) {
+        while (expr instanceof TupleExpression && ((TupleExpression) expr).expressions.size() == 1) {
+            expr = ((TupleExpression) expr).expressions[0]
+        }
+        return expr
     }
 
     private static boolean simpleIdentifier(String part) {
