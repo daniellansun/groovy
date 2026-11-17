@@ -143,6 +143,13 @@ final class GinqFluentTest {
     }
 
     @Test
+    void fromNullIntArrayIsRejected() {
+        shouldFail(NullPointerException) {
+            Ginq.from((int[]) null)
+        }
+    }
+
+    @Test
     void fluentStreamSourceIsFullyDrainedOnTheFirstTerminal() {
         List<Integer> seen = new ArrayList<>()
         Query<Integer> query = Ginq.from(Stream.of(1, 2, 3, 4).peek(n -> { seen.add(n); })).take(1)
@@ -176,6 +183,15 @@ final class GinqFluentTest {
     }
 
     @Test
+    void fluentStreamToListDoesNotReturnTheLiveBuffer() {
+        Query<Integer> query = Ginq.from(Stream.of(1, 2, 3))
+        List<Integer> first = query.toList()
+        first.add(99)
+        assert query.toList() == [1, 2, 3]
+        assert query.count() == 3L
+    }
+
+    @Test
     void queryToQueryJoinsCompileStatically() {
         Query<Person> people = Ginq.from([
                 new Person(1, 'Ann', 20),
@@ -205,6 +221,21 @@ final class GinqFluentTest {
 
         List<Integer> pred = people.join(orders) { p, o -> p.id == o.personId } { p, o -> o.amount }.orderBy { it }.toList()
         assert pred == [5, 7]
+
+        List<String> predLeft = people.leftJoin(orders, { p, o -> p.id == o.personId }, { p, o ->
+            o == null ? 'none' : o.amount.toString()
+        }).toList()
+        assert predLeft.toSet() == ['5', '7', 'none'] as Set
+
+        List<String> predRight = people.rightJoin(orders, { p, o -> p.id == o.personId }, { p, o ->
+            p == null ? 'none' : o.amount.toString()
+        }).toList()
+        assert predRight.toSet() == ['5', '7', 'none'] as Set
+
+        List<String> predFull = people.fullJoin(orders, { p, o -> p.id == o.personId }, { p, o ->
+            p == null ? 'none' : (o == null ? p.name : o.amount.toString())
+        }).toList()
+        assert predFull.toSet() == ['5', '7', 'none', 'Bob'] as Set
     }
 
     static final class Person {
