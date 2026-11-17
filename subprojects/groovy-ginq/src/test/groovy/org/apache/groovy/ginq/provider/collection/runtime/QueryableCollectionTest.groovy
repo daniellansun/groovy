@@ -22,6 +22,7 @@ import groovy.transform.CompileDynamic
 import groovy.transform.CompileStatic
 import groovy.transform.EqualsAndHashCode
 import groovy.transform.ToString
+import org.codehaus.groovy.runtime.typehandling.GroovyCastException
 import org.junit.jupiter.api.Test
 
 import java.util.concurrent.CountDownLatch
@@ -1425,7 +1426,7 @@ class QueryableCollectionTest {
     @Test
     void asTypeNullThrowsGroovyCastException() {
         Queryable<Integer> query = from([1, 2, 3])
-        def thrown = shouldFail(org.codehaus.groovy.runtime.typehandling.GroovyCastException) {
+        def thrown = shouldFail(GroovyCastException) {
             query.asType(null)
         }
         assert thrown.message.contains('to null')
