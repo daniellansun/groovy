@@ -358,6 +358,10 @@ public interface Query<T> {
         Objects.requireNonNull(inner, "inner");
         Objects.requireNonNull(on, "on");
         Objects.requireNonNull(resultSelector, "resultSelector");
+        return join(inner,
+                (outer, joined) -> truth(on, outer, joined),
+                (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
+    }
 
     /**
      * Equijoins another query and projects each matching pair. The join is a hash join, so the keys are compared with {@code equals}.
@@ -513,6 +517,10 @@ public interface Query<T> {
         Objects.requireNonNull(inner, "inner");
         Objects.requireNonNull(on, "on");
         Objects.requireNonNull(resultSelector, "resultSelector");
+        return leftJoin(inner,
+                (outer, joined) -> truth(on, outer, joined),
+                (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
+    }
 
     /**
      * Equijoins another query from the left. An unmatched outer element is passed with a {@code null} inner element.
@@ -668,6 +676,10 @@ public interface Query<T> {
         Objects.requireNonNull(inner, "inner");
         Objects.requireNonNull(on, "on");
         Objects.requireNonNull(resultSelector, "resultSelector");
+        return rightJoin(inner,
+                (outer, joined) -> truth(on, outer, joined),
+                (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
+    }
 
     /**
      * Equijoins another query from the right. An unmatched inner element is passed with a {@code null} outer element.
@@ -823,6 +835,10 @@ public interface Query<T> {
         Objects.requireNonNull(inner, "inner");
         Objects.requireNonNull(on, "on");
         Objects.requireNonNull(resultSelector, "resultSelector");
+        return fullJoin(inner,
+                (outer, joined) -> truth(on, outer, joined),
+                (outer, joined) -> Query.<R>invoke(resultSelector, outer, joined));
+    }
 
     /**
      * Full equijoin with another query. Unmatched elements on either side are passed with {@code null} for the other element.
