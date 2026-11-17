@@ -60,6 +60,11 @@ import org.codehaus.groovy.GroovyBugError
 @CompileStatic
 class MixedSourceLayout {
     static final String PRESENCE = '__ginq_present'
+    /**
+     * Planner reference to the synthetic presence marker. It is not a user
+     * column, so renaming the marker does not rewrite a real {@code __ginq_present}.
+     */
+    static final String MARKER = '__ginq_marker'
     private static final String SRC = '__ginq_src'
 
     private final List<String> aliasNames
@@ -515,7 +520,7 @@ class MixedSourceLayout {
         for (int index : rel.output) {
             SqlExpr column
             if (rel.direct.contains(aliasNames[index])) {
-                column = new SqlColumn(aliasNames[index], PRESENCE)
+                column = new SqlColumn(aliasNames[index], userProjections ? PRESENCE : MARKER)
             } else {
                 column = new SqlColumn(rel.container, userProjections ? presenceOut(index) : '__ginqabs_' + index)
             }
@@ -558,7 +563,11 @@ class MixedSourceLayout {
         query.from = rel.from
         query.joins.addAll(rel.joins)
         for (SqlProjection projection : original.projections) {
-            query.projections.add(new SqlProjection(rewriteExpr(projection.expr, rel), projection.alias))
+            String alias = projection.alias
+            if ((alias == null || alias.isEmpty()) && projection.expr instanceof SqlColumn) {
+                alias = ((SqlColumn) projection.expr).column
+            }
+            query.projections.add(new SqlProjection(rewriteExpr(projection.expr, rel), alias))
         }
         query.where = rewriteExpr(original.where, rel)
         for (SqlExpr key : original.groupBy) {
@@ -620,7 +629,7 @@ class MixedSourceLayout {
             if (!userProjections || probe == null || rel.direct.contains(alias)) {
                 return expr
             }
-            return new SqlColumn(rel.container, '__ginqstar_' + probe)
+            return new SqlColumn(rel.container, '__ginqstar_' + probe + '_' + alias)
         }
         if (expr instanceof SqlBinary) {
             return new SqlBinary(expr.op, rewriteExpr(expr.left, rel, alsoDirect), rewriteExpr(expr.right, rel, alsoDirect))

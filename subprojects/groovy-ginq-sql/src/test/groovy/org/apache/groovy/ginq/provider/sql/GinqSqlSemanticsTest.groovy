@@ -23,9 +23,13 @@ import groovy.sql.Sql
 import org.apache.groovy.ginq.provider.sql.render.Dialects
 import org.apache.groovy.ginq.provider.sql.runtime.SqlGinqRuntime
 import org.codehaus.groovy.ast.expr.ArgumentListExpression
+import org.codehaus.groovy.ast.expr.BinaryExpression
 import org.codehaus.groovy.ast.expr.ConstantExpression
+import org.codehaus.groovy.ast.expr.GStringExpression
 import org.codehaus.groovy.ast.expr.MethodCallExpression
 import org.codehaus.groovy.ast.expr.VariableExpression
+import org.codehaus.groovy.syntax.Token
+import org.codehaus.groovy.syntax.Types
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -173,6 +177,14 @@ class GinqSqlSemanticsTest {
         assert mysqlTokens.contains('`__ginq0_0`')
         assert mysqlTokens.contains('`__ginq0_1`')
         assert mysqlTokens.contains('`__ginq1_')
+
+        def brackets = SqlGinqRuntime.prepareMixedSql(
+                'SELECT [__ginqf0_2].[__ginqref_0_id] FROM [__ginqf0_2]',
+                [['id', 'name']],
+                '"' as char)
+        assert brackets.contains('[__ginq0_0]')
+        assert !brackets.contains(']"')
+        assert !brackets.contains('"__ginq0_0"')
     }
 
     @Test
@@ -186,6 +198,20 @@ class GinqSqlSemanticsTest {
         def call = new MethodCallExpression(new VariableExpression('Sql'), 'newInstance',
                 new ArgumentListExpression(new ConstantExpression('jdbc:mysql://localhost/db')))
         assert 'mysql' == GinqSqlWalker.jdbcDialect(call)
+
+        def h2GString = new GStringExpression('jdbc:h2:mem:$name',
+                [new ConstantExpression('jdbc:h2:mem:'), new ConstantExpression('')],
+                [new VariableExpression('name')])
+        assert 'h2' == GinqSqlWalker.jdbcDialect(h2GString)
+        def postgresGString = new GStringExpression('jdbc:postgresql://$host/db',
+                [new ConstantExpression('jdbc:postgresql://'), new ConstantExpression('/db')],
+                [new VariableExpression('host')])
+        assert 'postgres' == GinqSqlWalker.jdbcDialect(postgresGString)
+        def concatenated = new BinaryExpression(
+                new ConstantExpression('jdbc:h2:mem:'),
+                new Token(Types.PLUS, '+', -1, -1),
+                new VariableExpression('name'))
+        assert 'h2' == GinqSqlWalker.jdbcDialect(concatenated)
     }
 
     @Test

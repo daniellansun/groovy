@@ -303,12 +303,18 @@ public final class SqlGinqRuntime {
     }
 
     private static String substitutePresence(String sql, String presence, char quote) {
+        String marker = quoteIdentifierUnchecked("__ginq_marker", quote);
+        String named = quoteIdentifierUnchecked(presence, quote);
+        sql = sql.replace(marker, named);
         if (PRESENCE_BASE.equals(presence)) {
             return sql;
         }
-        String from = quoteIdentifierUnchecked(PRESENCE_BASE, quote);
-        String to = quoteIdentifierUnchecked(presence, quote);
-        return sql.replace(from, to);
+        // Rename only the marker we introduced (`1 AS "__ginq_present"`).
+        // A qualified user column `m."__ginq_present"` stays the user's column.
+        String definition = quoteIdentifierUnchecked(PRESENCE_BASE, quote);
+        return Pattern.compile("(?i)AS\\s+" + Pattern.quote(definition))
+                .matcher(sql)
+                .replaceAll("AS " + Matcher.quoteReplacement(named));
     }
 
     private static String quoteIdentifierUnchecked(String name, char quote) {
@@ -480,7 +486,7 @@ public final class SqlGinqRuntime {
                     continue;
                 }
                 end++;
-                emit = ch == '[' ? quote : ch;
+                emit = ch;
             }
             int aliasIndex = Integer.parseInt(matcher.group(3));
             if (aliasIndex < 0 || aliasIndex >= extended.size()) {
@@ -494,7 +500,12 @@ public final class SqlGinqRuntime {
                 column = columnIndex(names, matcher.group(4));
             }
             out.append(sql, last, matcher.start());
-            out.append(quoteIdentifier("__ginq" + aliasIndex + "_" + column, emit));
+            String rewritten = "__ginq" + aliasIndex + "_" + column;
+            if (emit == '[') {
+                out.append(quoteBracket(rewritten));
+            } else {
+                out.append(quoteIdentifier(rewritten, emit));
+            }
             last = end;
         }
         out.append(sql, last, sql.length());
@@ -549,8 +560,9 @@ public final class SqlGinqRuntime {
             } else if ("pass".equals(token.kind)) {
                 expanded.append(qualifier).append('.').append(synthetic);
             } else {
+                String visible = (token.alias == null || token.alias.isEmpty() ? "" : token.alias + "_") + label;
                 expanded.append(qualifier).append('.').append(synthetic);
-                expanded.append(" AS ").append(quoteIdentifier(label, quote));
+                expanded.append(" AS ").append(quoteIdentifier(visible, quote));
             }
         }
         if (!any) {
@@ -572,7 +584,13 @@ public final class SqlGinqRuntime {
     }
 
     private static String starName(int id, String label) {
-        return "__ginq_" + id + "_" + label;
+        // Disjoint from complete-path alias columns `__ginq_<aliasIndex>_<column>`,
+        // which case-fold onto the same spelling when a star probe reuses that index.
+        return "__ginqstarcol_" + id + "_" + label;
+    }
+
+    private static String quoteBracket(String name) {
+        return "[" + name.replace("]", "]]") + "]";
     }
 
     private static int nextStarToken(String sql, int from) {
@@ -621,7 +639,7 @@ public final class SqlGinqRuntime {
         }
         int id = Integer.parseInt(sql.substring(idStart, p));
         String column = null;
-        if ("col".equals(kind) && p < sql.length() && sql.charAt(p) == '_') {
+        if (("col".equals(kind) || "star".equals(kind)) && p < sql.length() && sql.charAt(p) == '_') {
             int nameStart = ++p;
             while (p < sql.length() && isIdent(sql.charAt(p))) {
                 p++;
@@ -680,7 +698,8 @@ public final class SqlGinqRuntime {
         StarToken token = new StarToken();
         token.kind = kind;
         token.id = id;
-        token.column = column;
+        token.column = "col".equals(kind) ? column : null;
+        token.alias = "star".equals(kind) ? column : null;
         token.end = end;
         token.qualifierStart = qualifierStart;
         token.qualifierEnd = qualifierEnd;
@@ -691,6 +710,7 @@ public final class SqlGinqRuntime {
         String kind;
         int id;
         String column;
+        String alias;
         int end;
         int qualifierStart;
         int qualifierEnd;

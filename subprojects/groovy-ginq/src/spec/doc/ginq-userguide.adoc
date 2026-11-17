@@ -1243,7 +1243,9 @@ alignment under a column name. An unmatched side of a pushed outer join is null,
 the collection provider. Each joined source is wrapped so the source itself carries a presence
 column, for example `(SELECT t.*, 1 AS "__ginq_present" FROM departments t) d`. The outer join
 makes that column null when the side has no row, and the name is chosen so it does not collide
-with a real column. A row that exists but whose columns are all null therefore stays a non-null
+with a real column. A real column that is already named `__ginq_present` stays that column:
+only the marker definition is renamed, so `on e.id == m.__ginq_present` still compares the
+user's values. A row that exists but whose columns are all null therefore stays a non-null
 row, while `d == null` is true when the join did not match. The in-memory tail pairs those
 already aligned rows by index, so a null alias stays null for a later `where`, `select`,
 `orderby`, `groupby` or join. PostgreSQL and SQLite spell a full join as
@@ -1251,14 +1253,19 @@ already aligned rows by index, so a null alias stays null for a later `where`, `
 `dialect: 'ansi'`, does not spell it either: the engine is not known yet, and the
 emulation below is valid both where `FULL OUTER JOIN` exists and where the engine
 rejects it. A JDBC URL visible on the `dataSource` expression (`jdbc:h2:`,
-`jdbc:mysql:`, `jdbc:mariadb:`, `jdbc:postgresql:`, `jdbc:sqlite:`) selects that
-dialect when `dialect` itself is omitted, including for a strict query. Each full
+`jdbc:mysql:`, `jdbc:mariadb:`, `jdbc:postgresql:`, `jdbc:sqlite:`), including the
+constant prefix of a GString such as `"jdbc:h2:mem:${name}"` or
+`"jdbc:postgresql://${host}/db"`, selects that dialect when `dialect` itself is
+omitted, including for a strict query. Each full
 join, in strict mode and in mixed mode, and inside `exists`, `in` or a scalar
 subquery as well as at the top, is then a left join union the right-join rows for
 which the whole left side is absent, and that union is a derived table the next
 join reads. A query that stays entirely in SQL keeps the author's `select` list. A
-whole-row projection such as `select e, d` stays one flat row of those sources'
-columns. The presence marker stays inside the union and is not a result column.
+whole-row projection such as `select e, d` stays one flat row. Each of its
+columns is labeled with the source alias, for example `e_NAME` and `d_NAME`,
+so a shared name cannot overwrite the other source. A named column beside a
+star keeps that column's own name: `select e.name, d` exposes `name` and
+`d_NAME`. The presence marker stays inside the union and is not a result column.
 `orderby` and `limit` apply to the combined rows, by the names of those output
 columns. A `where` clause is kept together: if any part of it cannot be translated, the whole
 predicate runs in memory and only the preceding `from`/`join` clauses are pushed.

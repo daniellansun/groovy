@@ -21,6 +21,10 @@ package org.apache.groovy.ginq.provider.sql
 import groovy.sql.Sql
 import org.junit.jupiter.api.AfterEach
 
+import java.sql.SQLException
+
+import static groovy.test.GroovyAssert.shouldFail
+
 import java.util.Locale
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -204,6 +208,23 @@ class GinqSqlMixedOuterJoinTest {
             select m == null, (m == null ? 'missing' : m.name)
         }.toList()
         assert [[true, 'missing']] == absent
+    }
+
+    @Test
+    void testUserPresenceColumnIsNotRewrittenToTheMarker() {
+        db.execute('create table people (id integer, name varchar(20))')
+        db.execute("insert into people (id, name) values (1, 'Alice'), (7, 'Gina'), (8, 'Hugo')")
+        db.execute('create table marks ("__ginq_present" integer, name varchar(20))')
+        db.execute('insert into marks ("__ginq_present", name) values (7, \'seven\'), (8, \'eight\')')
+        def rows = GQL(provider: 'native-sql', mixedMode: true, dataSource: db) {
+            from e in 'people'
+            leftjoin m in 'marks' on e.id == m.__ginq_present
+            select e.name, (m == null ? 'missing' : m.name)
+        }.toList()
+        assert ['Gina', 'seven'] in rows.collect { [it[0], it[1]] }
+        assert ['Hugo', 'eight'] in rows.collect { [it[0], it[1]] }
+        assert ['Alice', 'missing'] in rows.collect { [it[0], it[1]] }
+        assert !rows.any { it[0] == 'Alice' && it[1] != 'missing' }
     }
 
     @Test
@@ -405,6 +426,31 @@ class GinqSqlMixedOuterJoinTest {
     }
 
     @Test
+    void testGStringJdbcUrlSelectsTheDialect() {
+        def bucket = 'ginqmem'
+        def h2 = new GinqSqlTranslationTest.CapturingSql(db)
+        def rows = GQL(provider: 'native-sql', mixedMode: true, dataSource: keep(h2, "jdbc:h2:mem:${bucket}")) {
+            from e in 'employees'
+            fulljoin d in 'departments' on e.deptId == d.id
+            select e.name as en, d.name as dn
+        }.toList()
+        assertNoNativeFullJoin(h2.sqlText)
+        assert rows.any { it.en == 'Alice' && it.dn == 'Dev' }
+        assert rows.any { it.en == 'Dave' && it.dn == null }
+
+        def host = 'db.example'
+        def postgres = new GinqSqlTranslationTest.CapturingSql(db)
+        shouldFail(SQLException) {
+            GQL(provider: 'native-sql', mixedMode: true, dataSource: keep(postgres, "jdbc:postgresql://${host}/db")) {
+                from e in 'employees'
+                fulljoin d in 'departments' on e.deptId == d.id
+                select e.name as en, d.name as dn
+            }.toList()
+        }
+        assert postgres.sqlText.toUpperCase(Locale.ROOT).contains('FULL OUTER JOIN')
+    }
+
+    @Test
     void testOmittedDialectFullJoinRunsOnH2() {
         def captured = new GinqSqlTranslationTest.CapturingSql(db)
         def rows = GQL(provider: 'native-sql', mixedMode: true, dataSource: captured) {
@@ -443,12 +489,19 @@ class GinqSqlMixedOuterJoinTest {
         }.toList()
         assertNoNativeFullJoin(captured.sqlText)
         assert rows.every { !it.keySet().any { String key -> key.toLowerCase(Locale.ROOT).contains('present') } }
-        assert rows.any { it.salary == 6000 }
-        assert rows.any { it.salary == 2000 }
-        assert rows.any { it.salary == null && it.name == 'Empty' }
+        assert rows.every { it.values().size() == 7 }
+        def alice = rows.find { cell(it, 'e_NAME') == 'Alice' }
+        assert cell(alice, 'd_NAME') == 'Dev'
+        assert cell(alice, 'e_SALARY') == 5000
+        def dave = rows.find { cell(it, 'e_NAME') == 'Dave' }
+        assert cell(dave, 'e_SALARY') == 2000
+        assert cell(dave, 'd_NAME') == null
+        def empty = rows.find { cell(it, 'd_NAME') == 'Empty' }
+        assert cell(empty, 'e_NAME') == null
         assert 8 == rows.size()
 
-        def named = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: db) {
+        def namedCapture = new GinqSqlTranslationTest.CapturingSql(db)
+        def named = GQL(provider: 'native-sql', dialect: 'h2', mixedMode: true, dataSource: namedCapture) {
             from e in 'employees'
             fulljoin d in 'departments' on e.deptId == d.id
             select e.name, d
@@ -458,7 +511,23 @@ class GinqSqlMixedOuterJoinTest {
         assert triples.any { it[0] == null && it[2] == 'Empty' }
         assert triples.any { it[0] == 'Alice' && it[2] == 'Dev' }
         assert triples.every { it.size() == 3 }
+        def namedAlice = named.find { cell(it, 'name') == 'Alice' }
+        assert cell(namedAlice, 'd_NAME') == 'Dev'
+        def namedDave = named.find { cell(it, 'name') == 'Dave' }
+        assert cell(namedDave, 'd_NAME') == null
         assert 8 == named.size()
+        def lower = namedCapture.sqlText.toLowerCase(Locale.ROOT)
+        assert lower.contains('__ginq_0_name')
+        assert lower.contains('__ginqstarcol_0_name')
+    }
+
+    private static Object cell(row, String key) {
+        def found = row.keySet().find { String name -> name.equalsIgnoreCase(key) }
+        return found == null ? null : row[found]
+    }
+
+    static Sql keep(Sql db, String url) {
+        return db
     }
 
     @Test

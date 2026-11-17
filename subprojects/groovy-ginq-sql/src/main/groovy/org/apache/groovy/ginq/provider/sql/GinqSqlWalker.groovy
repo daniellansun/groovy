@@ -345,7 +345,15 @@ class GinqSqlWalker implements GinqAstVisitor<Expression>, SyntaxErrorReportable
             return found != null ? found : jdbcDialect(binary.rightExpression)
         }
         if (expression instanceof GStringExpression) {
-            for (Expression value : ((GStringExpression) expression).values) {
+            GStringExpression gstring = (GStringExpression) expression
+            // Constant pieces carry the scheme: "jdbc:h2:mem:${name}".
+            for (ConstantExpression part : gstring.strings) {
+                String found = Dialects.fromJdbcUrl(part.value == null ? null : part.value.toString())
+                if (found != null) {
+                    return found
+                }
+            }
+            for (Expression value : gstring.values) {
                 String found = jdbcDialect(value)
                 if (found != null) {
                     return found
