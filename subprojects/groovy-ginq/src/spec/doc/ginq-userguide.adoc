@@ -1280,9 +1280,8 @@ so the limit is applied to the filtered rows rather than to an unordered prefix.
 are not split; one that does not translate entirely is still a compile error. `mixedMode: false`,
 or omitting the option, keeps the strict default. The `from` source itself must still be a string
 table name or a subquery that translates to SQL. Strict-mode errors name the construct that failed
-and say how to rewrite it or how to enable `mixedMode`. This split follows the same boundary as
-LINQ's `AsEnumerable`: a translatable prefix runs in the database and the rest of the query
-continues in memory. It is never the default.
+and say how to rewrite it or how to enable `mixedMode`. A translatable prefix runs in the database
+and the rest of the query continues in memory. It is never the default.
 
 The main current restriction in strict mode is window functions. Aggregation is supported both in
 the classic form, e.g. `groupby e.deptId` with `select e.deptId, count(), sum(e.salary)`, and the
