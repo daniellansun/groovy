@@ -60,259 +60,172 @@ class GinqWindowProviderAgreementTest {
 
     @Test
     void testOneRowNumberingIsZeroBased() {
-        def expected = [[0, 7]]
-        def collection = GQ {
-            from r in oneRow
+        agreeOn('one_row', oneRow, ['rn', 'nth'], '''
             orderby r.n
             select (rowNumber() over(orderby r.n)) as rn, (nthValue(r.n, 0) over(orderby r.n)) as nth
-        }.toList()
-        def nativeRows = GQL(provider: 'native-sql', dataSource: db) {
-            from r in 'one_row'
-            orderby r.n
-            select (rowNumber() over(orderby r.n)) as rn, (nthValue(r.n, 0) over(orderby r.n)) as nth
-        }
-        def jooqRows = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-            from r in 'one_row'
-            orderby r.n
-            select (rowNumber() over(orderby r.n)) as rn, (nthValue(r.n, 0) over(orderby r.n)) as nth
-        }
-        agree(expected, collection)
-        agree(expected, nativeRows.collect { [it.rn, it.nth] })
-        agree(expected, jooqRows.collect { [it.rn, it.nth] })
+        ''', [[0, 7]])
     }
 
     @Test
     void testNtileZeroStaysOnBucketZero() {
-        def expected = seq.collect { [it.n, 0] }
-        def collection = GQ {
-            from r in seq
+        agreeOn('seq', seq, ['n', 'bucket'], '''
             orderby r.n
             select r.n, (ntile(0) over(orderby r.n)) as bucket
-        }.toList()
-        def nativeRows = GQL(provider: 'native-sql', dataSource: db) {
-            from r in 'seq'
-            orderby r.n
-            select r.n, (ntile(0) over(orderby r.n)) as bucket
-        }
-        def jooqRows = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-            from r in 'seq'
-            orderby r.n
-            select r.n, (ntile(0) over(orderby r.n)) as bucket
-        }
-        agree(expected, collection)
-        agree(expected, nativeRows.collect { [it.n, it.bucket] })
-        agree(expected, jooqRows.collect { [it.n, it.bucket] })
+        ''', seq.collect { [it.n, 0] })
     }
 
     @Test
     void testNtileUsesTheZeroBasedFormula() {
-        def expected = seq.collect { row -> [row.n, (4 * (row.n - 1)).intdiv(10)] }
-        def collection = GQ {
-            from r in seq
+        agreeOn('seq', seq, ['n', 'bucket'], '''
             orderby r.n
             select r.n, (ntile(4) over(orderby r.n)) as bucket
-        }.toList()
-        def nativeRows = GQL(provider: 'native-sql', dataSource: db) {
-            from r in 'seq'
-            orderby r.n
-            select r.n, (ntile(4) over(orderby r.n)) as bucket
-        }
-        def jooqRows = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-            from r in 'seq'
-            orderby r.n
-            select r.n, (ntile(4) over(orderby r.n)) as bucket
-        }
-        agree(expected, collection)
-        agree(expected, nativeRows.collect { [it.n, it.bucket] })
-        agree(expected, jooqRows.collect { [it.n, it.bucket] })
+        ''', seq.collect { row -> [row.n, (4 * (row.n - 1)).intdiv(10)] })
     }
 
     @Test
     void testOrderByWithoutAFrameIsTheWholePartition() {
         def expected = [[10, 60, 20], [20, 60, 20], [30, 60, 20]]
-        def collection = GQ {
-            from r in running
+        agreeOn('running', running, ['n', 'total', 'mean'], '''
             orderby r.n
             select r.n, (sum(r.n) over(orderby r.n)) as total, (avg(r.n) over(orderby r.n)) as mean
-        }.toList()
-        def nativeRows = GQL(provider: 'native-sql', dataSource: db) {
-            from r in 'running'
-            orderby r.n
-            select r.n, (sum(r.n) over(orderby r.n)) as total, (avg(r.n) over(orderby r.n)) as mean
-        }
-        def jooqRows = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-            from r in 'running'
-            orderby r.n
-            select r.n, (sum(r.n) over(orderby r.n)) as total, (avg(r.n) over(orderby r.n)) as mean
-        }
-        agree(expected, collection)
-        agree(expected, nativeRows.collect { [it.n, it.total, it.mean] })
-        agree(expected, jooqRows.collect { [it.n, it.total, it.mean] })
+        ''', expected)
         assert expected.every { it[1] == 60 }
     }
 
     @Test
     void testAllNullWindowSumIsZero() {
-        def expected = [[0], [0]]
-        def collection = GQ {
-            from r in blanks
+        agreeOn('blanks', blanks, ['total'], '''
             select (sum(r.n) over()) as total
-        }.toList()
-        def nativeRows = GQL(provider: 'native-sql', dataSource: db) {
-            from r in 'blanks'
-            select (sum(r.n) over()) as total
-        }
-        def jooqRows = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-            from r in 'blanks'
-            select (sum(r.n) over()) as total
-        }
-        agree(expected, collection)
-        agree(expected, nativeRows.collect { [it.total] })
-        agree(expected, jooqRows.collect { [it.total] })
+        ''', [[0], [0]])
     }
 
     @Test
     void testPercentRankAgreesOnTheFrozenFormula() {
-        def single = GQ {
-            from r in oneRow
+        agreeOn('one_row', oneRow, ['pct'], '''
             select (percentRank() over(orderby r.n)) as pct
-        }.toList()
-        def nativeSingle = GQL(provider: 'native-sql', dataSource: db) {
-            from r in 'one_row'
-            select (percentRank() over(orderby r.n)) as pct
-        }
-        def jooqSingle = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-            from r in 'one_row'
-            select (percentRank() over(orderby r.n)) as pct
-        }
-        agree([[1]], single)
-        agree([[1]], nativeSingle.collect { [it.pct] })
-        agree([[1]], jooqSingle.collect { [it.pct] })
-
+        ''', [[1]])
         // ranks 1, 1, 3, 3, 5 over 5 rows: (rank - 1) / (size - 1)
-        def expected = [[60, 0], [60, 0], [80, 0.5], [80, 0.5], [100, 1]]
-        def collection = GQ {
-            from r in scores
+        agreeOn('scores', scores, ['n', 'pct'], '''
             orderby r.n
             select r.n, (percentRank() over(orderby r.n)) as pct
-        }.toList()
-        def nativeRows = GQL(provider: 'native-sql', dataSource: db) {
-            from r in 'scores'
-            orderby r.n
-            select r.n, (percentRank() over(orderby r.n)) as pct
-        }
-        def jooqRows = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-            from r in 'scores'
-            orderby r.n
-            select r.n, (percentRank() over(orderby r.n)) as pct
-        }
-        agree(expected, collection)
-        agree(expected, nativeRows.collect { [it.n, it.pct] })
-        agree(expected, jooqRows.collect { [it.n, it.pct] })
+        ''', [[60, 0], [60, 0], [80, 0.5], [80, 0.5], [100, 1]])
     }
 
     @Test
     void testEmptyFrameAverageStaysNull() {
-        def expected = [[null], [null], [null]]
-        def collection = GQ {
-            from r in running
+        agreeOn('running', running, ['mean'], '''
             orderby r.n
             select (avg(r.n) over(orderby r.n rows 5, 6)) as mean
-        }.toList()
-        def nativeRows = GQL(provider: 'native-sql', dataSource: db) {
-            from r in 'running'
-            orderby r.n
-            select (avg(r.n) over(orderby r.n rows 5, 6)) as mean
-        }
-        def jooqRows = GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-            from r in 'running'
-            orderby r.n
-            select (avg(r.n) over(orderby r.n rows 5, 6)) as mean
-        }
-        agree(expected, collection)
-        agree(expected, nativeRows.collect { [it.mean] })
-        agree(expected, jooqRows.collect { [it.mean] })
+        ''', [[null], [null], [null]])
     }
 
     @Test
     void testRankFrameIsHonoredInMemoryAndRejectedBySql() {
-        def framed = GQ {
-            from r in running
+        def framed = '''
             orderby r.n
             select r.n, (rank() over(orderby r.n rows 0, 0)) as rk
-        }.toList()
-        def plain = GQ {
-            from r in running
+        '''
+        agree(collection(running, framed), [[10, 1], [20, 1], [30, 1]])
+        agree(collection(running, '''
             orderby r.n
             select r.n, (rank() over(orderby r.n)) as rk
-        }.toList()
-        agree([[10, 1], [20, 1], [30, 1]], framed)
-        agree([[10, 1], [20, 2], [30, 3]], plain)
+        '''), [[10, 1], [20, 2], [30, 3]])
 
-        def numbered = GQ {
-            from r in running
+        def numbered = '''
             orderby r.n
             select r.n, (rowNumber() over(orderby r.n rows 0, 0)) as rn
-        }.toList()
-        agree([[10, 0], [20, 1], [30, 2]], numbered)
-
-        def nativeRank = shouldFail '''
-            GQL(provider: 'native-sql', dataSource: db) {
-                from r in 'running'
-                select (rank() over(orderby r.n rows 0, 0))
-            }
         '''
+        agree(collection(running, numbered), [[10, 0], [20, 1], [30, 2]])
+
+        def nativeRank = sqlError('native-sql', 'running', framed)
         assert nativeRank.message.contains('does not accept')
         assert nativeRank.message.contains('GINQ applies that frame')
-        def jooqRank = shouldFail '''
-            GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-                from r in 'running'
-                select (rank() over(orderby r.n rows 0, 0))
-            }
-        '''
+        def jooqRank = sqlError('jooq-sql', 'running', framed)
         assert jooqRank.message.contains('does not accept')
+        assert jooqRank.message.contains('GINQ applies that frame')
 
-        def nativeNumber = shouldFail '''
-            GQL(provider: 'native-sql', dataSource: db) {
-                from r in 'running'
-                select (rowNumber() over(orderby r.n rows 0, 0))
-            }
-        '''
+        def nativeNumber = sqlError('native-sql', 'running', numbered)
         assert nativeNumber.message.contains('does not accept')
         assert !nativeNumber.message.contains('GINQ applies that frame')
+        def jooqNumber = sqlError('jooq-sql', 'running', numbered)
+        assert jooqNumber.message.contains('does not accept')
+        assert !jooqNumber.message.contains('GINQ applies that frame')
     }
 
     @Test
     void testRankWithoutOrderByIsNullInMemoryAndRejectedBySql() {
-        def collection = GQ {
-            from r in running
+        agree(collection(running, '''
             select (rank() over()) as rk,
                     (denseRank() over()) as dense,
                     (percentRank() over()) as pct,
                     (cumeDist() over()) as cume
-        }.toList()
-        agree([[null, null, null, null], [null, null, null, null], [null, null, null, null]], collection)
+        '''), [[null, null, null, null], [null, null, null, null], [null, null, null, null]])
 
-        def err = shouldFail '''
-            GQL(provider: 'native-sql', dataSource: db) {
-                from r in 'running'
-                select (rank() over())
+        def rank = 'select (rank() over())'
+        assert sqlError('native-sql', 'running', rank).message.contains('needs `orderby`')
+        assert sqlError('jooq-sql', 'running', rank).message.contains('needs `orderby`')
+
+        def percent = 'select (percentRank() over(partitionby r.n))'
+        assert sqlError('native-sql', 'running', percent).message.contains('needs `orderby`')
+        assert sqlError('jooq-sql', 'running', percent).message.contains('needs `orderby`')
+    }
+
+    private void agreeOn(String table, List<Map> source, List<String> columns, String clauses, List expected) {
+        agree(collection(source, clauses), expected)
+        agree(project(query('native-sql', table, clauses), columns), expected)
+        agree(project(query('jooq-sql', table, clauses), columns), expected)
+    }
+
+    private List collection(List<Map> source, String clauses) {
+        evaluate("""
+            GQ {
+                from r in rows
+                ${clauses}
+            }.toList()
+        """, [rows: source])
+    }
+
+    private List query(String provider, String table, String clauses) {
+        String call = provider == 'jooq-sql'
+                ? "GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db)"
+                : "GQL(provider: 'native-sql', dataSource: db)"
+        evaluate("""
+            ${call} {
+                from r in '${checked(table)}'
+                ${clauses}
             }
-        '''
-        assert err.message.contains('needs `orderby`')
-        def jooqErr = shouldFail '''
-            GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db) {
-                from r in 'running'
-                select (percentRank() over(partitionby r.n))
+        """, [db: db])
+    }
+
+    private static Throwable sqlError(String provider, String table, String clauses) {
+        String call = provider == 'jooq-sql'
+                ? "GQL(provider: 'jooq-sql', dialect: 'H2', dataSource: db)"
+                : "GQL(provider: 'native-sql', dataSource: db)"
+        shouldFail """
+            ${call} {
+                from r in '${checked(table)}'
+                ${clauses}
             }
-        '''
-        assert jooqErr.message.contains('needs `orderby`')
+        """
+    }
+
+    private static Object evaluate(String script, Map binding) {
+        new GroovyShell(new Binding(binding)).evaluate(script)
+    }
+
+    private static List project(List rows, List<String> columns) {
+        rows.collect { row -> columns.collect { name -> row[name] } }
+    }
+
+    private static String checked(String table) {
+        assert table ==~ /[A-Za-z_][A-Za-z0-9_]*/
+        table
     }
 
     private void store(String name, List<Map> values) {
-        db.execute "create table ${name} (n int)".toString()
+        db.execute "create table ${checked(name)} (n int)".toString()
         values.each { row ->
-            db.execute "insert into ${name} (n) values (?)", [row.n]
+            db.execute "insert into ${checked(name)} (n) values (?)", [row.n]
         }
     }
 
@@ -320,7 +233,7 @@ class GinqWindowProviderAgreementTest {
         values.collect { [n: it] }
     }
 
-    private static void agree(List expected, List actual) {
+    private static void agree(List actual, List expected) {
         assert expected.size() == actual.size()
         expected.eachWithIndex { Object want, int i ->
             same(want, actual[i])
