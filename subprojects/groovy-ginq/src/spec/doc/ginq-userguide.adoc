@@ -1499,8 +1499,8 @@ It does not add C# query syntax, and window functions have no `System.Linq` coun
 |A GINQ `on` clause is any predicate. An equality joined with `&&` can use a hash join.
 
 |`leftjoin` / `rightjoin` / `fulljoin`
-|not query-syntax operators
-|Outer joins are written in the GINQ query.
+|no outer-join keywords in query syntax
+|Outer joins are written in the GINQ query. C# query syntax has none of those keywords. `LeftJoin`, `RightJoin` and `FullJoin` are methods since .NET 10 / 11.
 
 |`union` / `intersect` / `minus`
 |`Union` / `Intersect` / `Except` methods
