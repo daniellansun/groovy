@@ -367,7 +367,31 @@ class GinqSqlIntegrationTest {
             select b.name, b.salary
         }
         // combined rows ordered by salary desc, name asc: Alice/5000, Eve/5000, Carol/4000, Bob/3000; offset 1, size 2
-        assert [['Eve', 5000], ['Carol', 4000]] == result.collect { [it.name, it.salary] }
+        def sqlRows = result.collect { [it.name, it.salary] }
+        assert [['Eve', 5000], ['Carol', 4000]] == sqlRows
+
+        // the same clause text on the collection provider orders the last operand, then combines
+        def employees = [
+                [name: 'Alice', salary: 5000, deptId: 1],
+                [name: 'Bob', salary: 3000, deptId: 1],
+                [name: 'Carol', salary: 4000, deptId: 2],
+                [name: 'Dave', salary: 2000, deptId: null],
+                [name: 'Eve', salary: 5000, deptId: 2],
+                [name: 'Frank', salary: 6000, deptId: 3]
+        ]
+        def collectionRows = GQ {
+            from a in employees
+            where a.deptId == 1
+            select a.name, a.salary
+            union
+            from b in employees
+            where b.deptId == 2
+            orderby b.salary in desc, b.name
+            limit 1, 2
+            select b.name, b.salary
+        }.toList()
+        assert [['Alice', 5000], ['Bob', 3000], ['Carol', 4000]] == collectionRows
+        assert collectionRows != sqlRows
     }
 
     @Test

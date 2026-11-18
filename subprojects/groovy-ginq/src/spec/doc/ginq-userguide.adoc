@@ -586,6 +586,8 @@ include::../test/org/apache/groovy/ginq/GinqTest.groovy[tags=ginq_setop_minus,in
 
 Each side of a set operation is a complete `from...select` expression and can include
 `where`, `groupby`, `orderby`, `limit`, and any other clauses.
+An `orderby` or `limit` on the final operand orders and slices that operand before the
+sides are combined. The combined rows are not reordered.
 
 NOTE: The set operation keyword must appear on its own line.
 Set operations are also available as methods on any `Queryable` result:

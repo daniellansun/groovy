@@ -3918,6 +3918,32 @@ class GinqTest {
     }
 
     @Test
+    void "testGinq - set operation trailing orderby and limit orders the last operand"() {
+        assertGinqScript '''
+            def employees = [
+                    [name: 'Alice', salary: 5000, deptId: 1],
+                    [name: 'Bob', salary: 3000, deptId: 1],
+                    [name: 'Carol', salary: 4000, deptId: 2],
+                    [name: 'Dave', salary: 2000, deptId: null],
+                    [name: 'Eve', salary: 5000, deptId: 2],
+                    [name: 'Frank', salary: 6000, deptId: 3]
+            ]
+            // the final operand is ordered and sliced, then combined with the first operand
+            assert [['Alice', 5000], ['Bob', 3000], ['Carol', 4000]] == GQ {
+                from a in employees
+                where a.deptId == 1
+                select a.name, a.salary
+                union
+                from b in employees
+                where b.deptId == 2
+                orderby b.salary in desc, b.name
+                limit 1, 2
+                select b.name, b.salary
+            }.toList()
+        '''
+    }
+
+    @Test
     void "testGinq - chained set operations"() {
         assertGinqScript '''
             // [1,2,3] union [3,4,5] = [1,2,3,4,5], then minus [4,5,6] = [1,2,3]
