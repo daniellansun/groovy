@@ -355,9 +355,9 @@ public class AsyncSupport {
 
     /**
      * Converts an arbitrary source to an {@link Iterable} for use in
-     * {@code for await} loops. Handles arrays, collections, iterables,
-     * iterators, and adapter-supported types. The returned iterable may
-     * block on {@code next()} for async sources.
+     * {@code for await} loops. Handles arrays ({@code Object[]}, not primitive
+     * arrays), collections, iterables, iterators, and adapter-supported types.
+     * The returned iterable may block on {@code next()} for async sources.
      *
      * @param source the source to convert
      * @param <T>    the element type

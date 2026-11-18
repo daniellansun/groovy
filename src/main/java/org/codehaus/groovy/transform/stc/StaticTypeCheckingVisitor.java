@@ -3445,11 +3445,17 @@ out:    if ((samParameterTypes.length == 1 && isOrImplements(samParameterTypes[0
     }
 
     /**
-     * Returns {@code Iterable<E>} for the call a {@code for await} loop makes to
-     * convert its source, {@code AsyncSupport.toIterable(source)}, where {@code E}
-     * is the element type of an array, {@code Iterable}, {@code Iterator} or
-     * {@code Flow.Publisher} source. The method declares {@code <T> Iterable<T>}
-     * and takes an {@code Object}, so nothing else gives {@code T} a type.
+     * Returns {@code Iterable<E>} for the public conversion
+     * {@link AsyncSupport#toIterable(Object)} that a {@code for await} loop
+     * uses on its source, where {@code E} is the element type of a
+     * non-primitive array, {@code Iterable}, {@code Iterator} or
+     * {@code Flow.Publisher}. That conversion is declared
+     * {@code <T> Iterable<T> toIterable(Object)}, so nothing else binds
+     * {@code T}. The refinement applies to every static call of the method,
+     * including the compiler-generated call and a static import. A
+     * source-level qualified call is a {@code MethodCallExpression} and is
+     * not yet retyped; applying this helper from
+     * {@code visitMethodCallExpression} is a follow-up.
      *
      * @return the type, or {@code null} for another method or kind of source
      */
@@ -4811,6 +4817,7 @@ out:    if ((samParameterTypes.length == 1 && isOrImplements(samParameterTypes[0
                                     returnType = rt;
                                 }
                             }
+                            // see forAwaitIterableType; a qualified MethodCallExpression is not yet retyped
                             ClassNode forAwaitType = forAwaitIterableType(targetMethod, args);
                             if (forAwaitType != null) {
                                 returnType = forAwaitType;

@@ -266,8 +266,8 @@ a `ThreadLocal` fallback is used transparently.
 [[async-for-await]]
 === Consuming with `for await`
 
-`for await` iterates over any async source. For generators and plain collections,
-it works identically to a regular `for` loop:
+`for await` iterates over any async source. For generators and plain collections
+the loop is written the same way as a regular `for` loop:
 
 [source,groovy]
 ----
@@ -278,8 +278,12 @@ The key value of `for await` is with **reactive types** (Reactor `Flux`, RxJava
 `Observable`, `java.util.concurrent.Flow.Publisher`) where it automatically
 converts the source to a blocking iterable via the adapter SPI. Without
 `for await`, you would need to call the conversion manually (e.g.,
-`flux.toIterable()`). For generators and plain collections, a regular `for`
-loop works identically.
+`flux.toIterable()`). Under `@CompileStatic` and `@TypeChecked`, the loop
+variable is the element type for an `Iterable` (including `AsyncChannel`), an
+`Iterator`, a non-primitive array, and a `Flow.Publisher`. A `Stream`, a
+primitive array, a `Map`, a `String`, and an `Enumeration` stay `Object`, and
+the built-in conversion does not accept the ones that are not handed to the
+adapter SPI.
 
 The JDK's `Flow.Publisher` is supported out of the box — no adapter module
 needed. This means streams exposed by built-in sources such as
@@ -344,6 +348,10 @@ Drop-in adapter modules are provided for:
 * **`groovy-reactor`** — `await` on `Mono`, `for await` over `Flux`
 * **`groovy-rxjava`** — `await` on `Single`/`Maybe`/`Completable`,
   `for await` over `Observable`/`Flowable`
+
+Core static type checking types optional-module and custom SPI sources as
+`Object` until those modules ship type-checking extensions; runtime `for await`
+over `Flux` and `Observable` still works when the adapter is present.
 
 For example, without the adapter you must manually convert RxJava types:
 

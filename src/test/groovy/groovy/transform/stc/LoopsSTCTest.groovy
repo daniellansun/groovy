@@ -262,6 +262,18 @@ class LoopsSTCTest extends StaticTypeCheckingTestCase {
         '''
     }
 
+    // GROOVY-12767
+    @Test
+    void testForAwaitLoopOnStream() {
+        // Unlike the plain for-in loop above (GROOVY-10476), for await does not
+        // infer the stream's element type, and there is no dedicated
+        // unsupported-source error.
+        shouldFailWithMessages '''
+            for await (item in ['a','b','c'].stream()) { item.toUpperCase() }
+        ''',
+        'Cannot find matching method java.lang.Object#toUpperCase()'
+    }
+
     // GROOVY-8882
     @Test
     void testForInLoopOnString() {
@@ -496,18 +508,72 @@ class LoopsSTCTest extends StaticTypeCheckingTestCase {
             assert fromIterator([1, 2].iterator()) == 3
             assert fromArray(new Integer[]{1, 2}) == 6
             assert fromBounded([1L, 2L]) == 3
+
+            // Emits 1, 2 and completes on every subscribe, so the two-loop
+            // fromPublisher helper above can consume one source twice.
+            assert fromPublisher(new Flow.Publisher<Integer>() {
+                @Override
+                void subscribe(Flow.Subscriber<? super Integer> subscriber) {
+                    subscriber.onSubscribe(new Flow.Subscription() {
+                        @Override void request(long n) { }
+                        @Override void cancel() { }
+                    })
+                    subscriber.onNext(1)
+                    subscriber.onNext(2)
+                    subscriber.onComplete()
+                }
+            }) == 6
         '''
     }
 
     // GROOVY-12767
     @Test
     void testForAwaitLoopElementTypeMismatch() {
+        // The expected java.lang.Iterable<java.lang.Integer> wording documents the
+        // current desugaring leak; source-named diagnostics are follow-up C.2.
         shouldFailWithMessages '''
             void test(List<Integer> source) {
                 for await (Date d in source) { }
             }
         ''',
         'Cannot loop with element of type java.util.Date with collection of type java.lang.Iterable<java.lang.Integer>'
+    }
+
+    // GROOVY-12767
+    @Test
+    void testForAwaitLoopPrimitiveArray() {
+        // Current wording, not a dedicated "not a for-await source" error.
+        // A hard error is rejected because the adapter SPI is open.
+        shouldFailWithMessages '''
+            void test(int[] source) {
+                for await (int x in source) { }
+            }
+        ''',
+        'Cannot loop with element of type int with collection of type java.lang.Iterable<java.lang.Object>'
+
+        // Compiles, and x is Object. The 6.0.0 runtime throws from
+        // AwaitableAdapterRegistry ("No Iterable adapter found…").
+        assertScript '''
+            void test(int[] source) {
+                for await (x in source) { x.toString() }
+            }
+        '''
+        shouldFailWithMessages '''
+            void test(int[] source) {
+                for await (x in source) { x.intValue() }
+            }
+        ''',
+        'Cannot find matching method java.lang.Object#intValue()'
+
+        // int[][] is an Object[] of int[], which toIterable accepts
+        // (source instanceof Object[]), so the element type is int[].
+        assertScript '''
+            int[][] matrix = [[1, 2] as int[], [3] as int[]] as int[][]
+            int n = 0
+            for await (int[] row in matrix) { n += row.length }
+            for await (row in matrix) { n += row.length }
+            assert n == 6
+        '''
     }
 
     // GROOVY-12767
