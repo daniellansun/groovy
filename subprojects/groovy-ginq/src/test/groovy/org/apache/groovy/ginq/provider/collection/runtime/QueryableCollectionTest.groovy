@@ -1036,6 +1036,19 @@ class QueryableCollectionTest {
     }
 
     @Test
+    void testParallelStreamRebuildsFromTheList() {
+        def previous = QueryableHelper.getVar('parallel')
+        QueryableHelper.setVar('parallel', 'true')
+        try {
+            def query = from([1, 2, 3])
+            assert [1, 2, 3] == query.toList()
+            assert [1, 2, 3] == query.stream().collect(Collectors.toList())
+        } finally {
+            QueryableHelper.setVar('parallel', previous)
+        }
+    }
+
+    @Test
     void testExists() {
         def nums = [1, 2, 3]
         def result = from(nums).exists()

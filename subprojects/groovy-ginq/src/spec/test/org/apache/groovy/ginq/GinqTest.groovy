@@ -4063,8 +4063,8 @@ class GinqTest {
             def source = [1, 2, 3].stream()
             def query = GQ { from n in source select n }
             assert [1, 2, 3] == query.stream().toList()
-            def consumed = shouldFail(IllegalStateException) { query.stream().toList() }
-            assert consumed.message.contains('stream has already been operated upon')
+            // the query replays its buffer; the original stream does not restart
+            assert [1, 2, 3] == query.stream().toList()
             def sourceAgain = shouldFail(IllegalStateException) { source.toList() }
             assert sourceAgain.message.contains('stream has already been operated upon')
 
