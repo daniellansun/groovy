@@ -53,6 +53,26 @@ final class WindowImplTest {
             from n in [7]
             select (percentRank() over(orderby n))
         }.toList()
+
+        assert [[0L, 7]] == GQ {
+            from n in [7]
+            select (rowNumber() over(orderby n)), (nthValue(n, 0) over(orderby n))
+        }.toList()
+
+        assert [0L, 0L, 0L] == GQ {
+            from n in [1, 2, 3]
+            select (ntile(0) over(orderby n))
+        }.toList()
+
+        assert [0, 0] == GQ {
+            from n in [null, null]
+            select (sum(n) over())
+        }.toList()
+
+        assert [1L, 1L, 1L] == GQ {
+            from n in [10, 20, 30]
+            select (rank() over(orderby n rows 0, 0))
+        }.toList()
     }
 
     @Test
