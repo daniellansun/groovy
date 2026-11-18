@@ -554,6 +554,9 @@ class SqlWindowTranslationTest {
         assert noErrors(parsed)
         def sql = ansi(query).sql
         assert sql.contains('RANK() OVER (ORDER BY e.salary ASC NULLS LAST, e.name ASC NULLS FIRST)')
+        def jooq = JooqRenderer.render(query, 'H2').sql.toLowerCase(Locale.ROOT)
+        assert jooq.contains('nulls last')
+        assert jooq.contains('nulls first')
     }
 
     @Test
@@ -577,6 +580,11 @@ class SqlWindowTranslationTest {
             JooqRenderer.render(query, 'MYSQL')
         }
         assert jooqErr.message.contains('extra sort key')
+        def jooqMaria = shouldFail(IllegalArgumentException) {
+            JooqRenderer.render(query, 'MARIADB')
+        }
+        assert jooqMaria.message.contains('numeric RANGE offset')
+        assert jooqMaria.message.contains('extra sort key')
 
         def rows = parse('''
             from e in 'employees'
