@@ -121,11 +121,13 @@ include::../test/org/apache/groovy/ginq/GinqTest.groovy[tags=ginq_datasource_03,
 include::../test/org/apache/groovy/ginq/GinqTest.groovy[tags=ginq_datasource_01,indent=0]
 ----
 
-A Java `Stream` is one-shot. The first terminal consumes it, and that stream cannot be
-read again the way a list can. `GQ` stays lazy: building the query does not pull elements.
-`toList()` materializes the query and later terminals read that list. `stream()` on a query
-whose source is a reusable `Iterable` builds a new stream each time. `GQL`, and an `@GQ`
-method whose result type is a list, call `toList()` at the expression, so they run then.
+A Java `Stream` source is one-shot. The stream object itself cannot be read again the way
+a list can. The query pulls that stream into a buffer, so a later `stream()` on the query
+replays the buffer instead of restarting the source. `GQ` stays lazy: building the query
+does not pull elements. `toList()` materializes the query and later terminals read that
+list. `stream()` on a query whose source is a reusable `Iterable` reads that source again.
+`GQL`, and an `@GQ` method whose result type is a list, call `toList()` at the expression,
+so they run then.
 
 ==== Array Data Source
 [source, sql]
