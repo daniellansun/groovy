@@ -23,8 +23,7 @@ import org.apache.groovy.lang.annotation.Incubating;
 /**
  * One group produced by {@link Query#groupBy}. The group is itself a query over
  * its elements, and {@link #getKey()} is the value the key selector returned.
- * {@code count()} and the other aggregates therefore describe the group, which
- * is the same idea as LINQ's {@code IGrouping}.
+ * {@code count()} and the other aggregates therefore describe the group.
  *
  * @param <K> the key type
  * @param <T> the element type

@@ -24,8 +24,8 @@ import org.apache.groovy.lang.annotation.Incubating;
 import java.util.stream.Stream;
 
 /**
- * Starts a fluent GINQ query. The operators on {@link Query} follow LINQ's method
- * syntax ({@code where}, {@code select}, {@code orderBy}, {@code groupBy}, {@code join})
+ * Starts a fluent GINQ query. The operators on {@link Query} are method
+ * calls ({@code where}, {@code select}, {@code orderBy}, {@code groupBy}, {@code join})
  * and run on the same in-memory runtime as {@code GQ { ... }}. They are deferred
  * until a terminal operation such as {@link Query#toList()}.
  * <p>

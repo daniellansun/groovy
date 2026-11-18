@@ -55,7 +55,7 @@ import java.util.stream.Stream;
 public interface Query<T> {
 
     /**
-     * Keeps elements that match {@code predicate}. Same role as LINQ {@code Where}.
+     * Keeps elements that match {@code predicate}.
      *
      * @param predicate the filter
      * @return the filtered query
@@ -74,7 +74,7 @@ public interface Query<T> {
     }
 
     /**
-     * Maps each element. Same role as LINQ {@code Select}.
+     * Maps each element.
      *
      * @param selector the projection
      * @param <R> the result element type
@@ -96,7 +96,6 @@ public interface Query<T> {
 
     /**
      * Maps each element to zero or more results and flattens them.
-     * Same role as LINQ {@code SelectMany}.
      *
      * @param selector the collection selector; a {@code null} collection contributes nothing
      * @param <R> the result element type
@@ -232,7 +231,7 @@ public interface Query<T> {
     }
 
     /**
-     * Groups elements by key. Same role as LINQ {@code GroupBy}.
+     * Groups elements by key.
      * A {@code null} key is one group.
      *
      * @param keySelector the group key
@@ -997,7 +996,7 @@ public interface Query<T> {
     Query<T> union(Query<? extends T> other);
 
     /**
-     * Concatenates {@code other}, keeping duplicates. Same role as LINQ {@code Concat}.
+     * Concatenates {@code other}, keeping duplicates.
      *
      * @param other the other source
      * @return the concatenation
@@ -1029,7 +1028,7 @@ public interface Query<T> {
     Query<T> intersect(Query<? extends T> other);
 
     /**
-     * Set difference. Same role as LINQ {@code Except}.
+     * Set difference.
      *
      * @param other the other source
      * @return the difference
@@ -1104,7 +1103,7 @@ public interface Query<T> {
     }
 
     /**
-     * Same as {@link #limit(long)}. LINQ calls this {@code Take}.
+     * Same as {@link #limit(long)}.
      *
      * @param count the maximum number of elements
      * @return the limited query
@@ -1114,7 +1113,7 @@ public interface Query<T> {
     }
 
     /**
-     * Drops the first {@code count} elements. LINQ calls this {@code Skip}.
+     * Drops the first {@code count} elements.
      *
      * @param count the number of elements to drop
      * @return the remaining query
@@ -1336,7 +1335,7 @@ public interface Query<T> {
 
     /**
      * Reduces the query with {@code aggregator}. Same role as {@code agg} in a GINQ query
-     * and as LINQ {@code Aggregate} over the whole sequence.
+     * over the whole sequence.
      *
      * @param aggregator the reduction
      * @param <R> the result type
@@ -1357,7 +1356,7 @@ public interface Query<T> {
     }
 
     /**
-     * Folds the elements, starting from {@code seed}. Same role as LINQ {@code Aggregate}.
+     * Folds the elements, starting from {@code seed}.
      *
      * @param seed the initial value
      * @param accumulator combines the current value with the next element

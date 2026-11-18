@@ -23,7 +23,7 @@
  * <p>
  * Two front ends share the collection query runtime. {@code GQ}, {@code GQL}, and
  * {@code @GQ} are the SQL-like syntax. {@link Ginq} and
- * {@link Query} are the fluent, LINQ-style method syntax:
+ * {@link Query} are the fluent method syntax:
  * {@code where}, {@code select}, {@code orderBy}, {@code groupBy}, {@code join},
  * and {@code aggregate}. Database providers are driven by the SQL-like syntax,
  * which keeps an expression tree. The fluent API runs in memory.

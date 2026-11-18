@@ -145,11 +145,11 @@ it.
 
 **Fluent operators record until a terminal.** `GinqQuery` stores the predicate,
 the selector, and the orderings, and calls `Queryable` from `materialize`,
-which only a terminal invokes. This is the LINQ-to-Objects shape (a query
-object that runs when it is enumerated), not the LINQ-to-SQL shape (an
-expression tree a provider rewrites). Groovy already has the macro for the
-expression-tree case. Copying `IQueryable` would duplicate the macro and force
-every in-memory operator through a translator. The fluent API therefore stays
+which only a terminal invokes. The fluent query is a recording object that
+runs when a terminal reads it. It is not an expression tree a provider
+rewrites. Groovy already has the macro for the expression-tree case. Sending
+every in-memory operator through that translator would duplicate the macro.
+The fluent API therefore stays
 a recording object. It does not use `LazyQueryable`, and it does not depend on
 static compilation: the same object is lazy in a dynamic method.
 
@@ -233,7 +233,7 @@ Two sources, two rules.
 * `Ginq.from` on an `Iterable` or array re-reads that source on every terminal.
   `where`, `select`, and the other operators record the work; they do not copy
   the elements. Adding to the list between two `toList()` calls is visible.
-  This is the LINQ-to-Objects rule. Fluent `Ginq.from` / `GinqQuery.from` of
+  Fluent `Ginq.from` / `GinqQuery.from` of
   an `int[]` is `Query<Integer>` and re-boxes the array on each terminal, so a
   later mutation of the array is visible. Other primitive arrays are out of
   scope for this fluent factory; only `int[]` matches `Queryable.from`.
