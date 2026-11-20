@@ -27,6 +27,8 @@ import org.junit.jupiter.api.Test
 import java.sql.SQLException
 import java.util.Locale
 
+import static groovy.test.GroovyAssert.shouldFail
+
 /**
  * GINQ SQL queries compiled from source while the test runs.
  * Each script selects its provider and dialect itself.
@@ -307,6 +309,75 @@ class GinqSqlRuntimeCompilationTest {
         assert rows[0].size() <= 2
         assert rows[1].size() <= 2
         assert rows[0].every { it.name && it.deptName && it.half instanceof Number && it.at instanceof Number }
+    }
+
+    @Test
+    void plusCastSubstringAndRangesFollowTheOperandKinds() {
+        def rows = eval('''
+            String suffix = '!'
+            int bonus = 1
+            def rows = GQL(provider: 'native-sql', dataSource: db) {
+                from e in 'employees'
+                where e.id == 1
+                select e.name + (suffix as String) as label, e.salary + (bonus as int) as pay,
+                       (e.salary as long) as wide, (e.name as String) as text,
+                       e.name.substring(1, 3) as mid, e.name.length() as n,
+                       Math.max(e.salary, 1000) as hi, -e.salary as neg
+            }
+            rows
+        ''')
+        assert rows.size() == 1
+        assert rows[0].label == 'Alice!'
+        assert rows[0].pay == 5001
+        assert rows[0].mid == 'li'
+        assert rows[0].n == 5
+        assert rows[0].hi == 5000
+        assert rows[0].neg == -5000
+        assert db.sqlText.contains('||')
+        assert db.sqlText.contains('BIGINT')
+        assert db.sqlText.contains('VARCHAR')
+
+        def names = eval('''
+            GQL(provider: 'native-sql', dataSource: db) {
+                from e in 'employees'
+                where e.salary in 4000..5000 && e.deptId in [1, null] && e.name !in ['Bob']
+                orderby e.name
+                select e.name
+            }
+        ''')
+        assert names.collect { it.name } == ['Alice']
+
+        def added = eval('''
+            GQL(provider: 'native-sql', dataSource: db) {
+                from e in 'employees'
+                where (e.salary - 1000) in (from x in 'employees' select x.salary)
+                orderby e.name
+                select e.name
+            }
+        ''')
+        assert added.collect { it.name }.toSet() == ['Alice', 'Bob', 'Carol', 'Eve', 'Frank'] as Set
+        assert db.sqlText.toUpperCase(Locale.ROOT).contains(' IN (')
+
+        def both = shouldFail {
+            new GroovyShell(new Binding([db: db])).evaluate('''
+                GQL(provider: 'native-sql', dataSource: db) {
+                    from e in 'employees'
+                    select e.name + e.salary
+                }
+            ''')
+        }
+        assert both.message.contains('not translated')
+
+        def table = shouldFail {
+            new GroovyShell(new Binding([db: db])).evaluate('''
+                def table = 'employees'
+                GQL(provider: 'native-sql', dataSource: db) {
+                    from e in table
+                    select e.name
+                }
+            ''')
+        }
+        assert table.message.contains('string literal')
     }
 
     private Object eval(String script) {

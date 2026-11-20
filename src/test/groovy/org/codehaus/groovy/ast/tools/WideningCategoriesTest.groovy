@@ -468,6 +468,26 @@ final class WideningCategoriesTest extends GenericsTestCase {
     }
 
     @Test
+    void testLubOfDifferentlyParameterizedListsStaysAList() {
+        ClassNode strings = GenericsUtils.makeClassSafeWithGenerics(List, STRING_TYPE)
+        ClassNode ints = GenericsUtils.makeClassSafeWithGenerics(List, Integer_TYPE)
+        ClassNode lub = lowestUpperBound(strings, ints)
+        assert lub.redirect() == LIST_TYPE.redirect() || lub.name.contains('List') || lub.name.contains('Collection')
+        assertNoZeroArityParameterization(lub)
+        ClassNode other = lowestUpperBound(ints, strings)
+        assert other.redirect().name == lub.redirect().name
+        assertNoZeroArityParameterization(other)
+    }
+
+    @Test
+    void testLubOfStringAndStringBuilderDoesNotParameterizeSerializable() {
+        ClassNode lub = lowestUpperBound(STRING_TYPE, make(StringBuilder))
+        assertNoZeroArityParameterization(lub)
+        String signature = BytecodeHelper.getGenericsBounds(lub)
+        assert signature == null || !signature.contains('Serializable<')
+    }
+
+    @Test
     void testLUBOfArrayTypes() {
         def typeA = extractTypesFromCode('Number[] type').type
         def typeB = extractTypesFromCode('Integer[] type').type

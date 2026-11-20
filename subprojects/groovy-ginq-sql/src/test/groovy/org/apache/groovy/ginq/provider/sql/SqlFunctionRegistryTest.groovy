@@ -191,6 +191,46 @@ class SqlFunctionRegistryTest {
     }
 
     @Test
+    void testConcatIsEmptyAndRejectedNames() {
+        def site = recordingSite()
+        def concat = SqlFunctionRegistry.standard().find('concat', SqlFunctionMapping.Kind.RECEIVER)
+        def joined = concat.translate(callX(propX(varX('e'), 'name'), 'concat'), [constX('!')], site)
+        assert joined instanceof SqlBinary
+        assert '||' == joined.op
+
+        def concatArity = shouldFail(IllegalArgumentException) {
+            concat.translate(callX(propX(varX('e'), 'name'), 'concat'), [], site)
+        }
+        assert concatArity.message.contains('one argument')
+
+        def empty = SqlFunctionRegistry.standard().find('isEmpty', SqlFunctionMapping.Kind.RECEIVER)
+        def blank = empty.translate(callX(propX(varX('e'), 'name'), 'isEmpty'), [], site)
+        assert blank instanceof SqlBinary
+        assert '=' == blank.op
+
+        def emptyArity = shouldFail(IllegalArgumentException) {
+            empty.translate(callX(propX(varX('e'), 'name'), 'isEmpty'), [constX(1)], site)
+        }
+        assert emptyArity.message.contains('no arguments')
+
+        def badName = shouldFail(IllegalArgumentException) {
+            SqlFunctionMapping.receiver('1bad', 'UPPER')
+        }
+        assert badName.message.contains('1bad')
+
+        def badRange = shouldFail(IllegalArgumentException) {
+            SqlFunctionMapping.receiver('round', 'ROUND', 2, 1)
+        }
+        assert badRange.message.contains('2..1')
+
+        def open = SqlFunctionMapping.freeFunction('coalesce', 'COALESCE', 2, Integer.MAX_VALUE)
+        def tooFew = shouldFail(IllegalArgumentException) {
+            open.translate(callX(varX('this'), 'coalesce'), [constX(1)], site)
+        }
+        assert tooFew.message.contains('at least 2')
+    }
+
+    @Test
     void testRegisteredFunctionTranslatesToItsSqlName() {
         def extra = SqlFunctionRegistry.standard().copy()
         extra.register(SqlFunctionMapping.receiver('signum', 'SIGN'))

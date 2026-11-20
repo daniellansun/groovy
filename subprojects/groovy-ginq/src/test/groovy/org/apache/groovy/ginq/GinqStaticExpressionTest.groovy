@@ -28,6 +28,82 @@ import static groovy.test.GroovyAssert.assertScript
 class GinqStaticExpressionTest {
 
     @Test
+    void prefixIncrementIsSharedWithTheCaller() {
+        assertScript '''
+            import groovy.transform.CompileStatic
+            @CompileStatic
+            class Example {
+                static List<Integer> run() {
+                    Integer cnt = 0
+                    List<Integer> values = GQ { from n in [1, 2] select ++cnt }.toList()
+                    return values + [cnt]
+                }
+            }
+            assert Example.run() == [1, 2, 2]
+        '''
+    }
+
+    @Test
+    void fieldAndConstructorQueriesCaptureTheirBounds() {
+        assertScript '''
+            import groovy.transform.CompileStatic
+            @CompileStatic
+            class Held {
+                static int bound = 1
+                static List<Integer> values = GQ { from n in [0, 1, 2] where n > bound select n }.toList()
+            }
+            @CompileStatic
+            class Built {
+                final List<Integer> values
+                Built(int bound) {
+                    values = GQ { from n in [0, 1, 2] where n > bound select n }.toList()
+                }
+            }
+            assert Held.values == [2]
+            assert new Built(0).values == [1, 2]
+        '''
+    }
+
+    @Test
+    void typeCheckedSkipStillRunsTheQuery() {
+        assertScript '''
+            import groovy.transform.TypeChecked
+            import groovy.transform.TypeCheckingMode
+            @TypeChecked(TypeCheckingMode.SKIP)
+            class Example {
+                static List run() {
+                    GQ {
+                        from row in [[a: 1], [a: 4]]
+                        where row.a > 2 && !(row.a == 0)
+                        select row.a
+                    }.toList()
+                }
+            }
+            assert Example.run() == [4]
+        '''
+    }
+
+    @Test
+    void primitiveArrayAndWildcardQueryableKeepTheirElementTypes() {
+        assertScript '''
+            import groovy.transform.CompileStatic
+            import org.apache.groovy.ginq.provider.collection.runtime.Queryable
+            @CompileStatic
+            class Example {
+                static List ints() {
+                    int[] nums = [1, 2, 3] as int[]
+                    GQ { from n in nums where n > 1 select n * 2 }.toList()
+                }
+                static List boxed(Queryable<? extends Integer> rows) {
+                    GQ { from n in rows where n > 1 select n }.toList()
+                }
+            }
+            assert Example.ints() == [4, 6]
+            assert Example.boxed(Queryable.from([1, 4])) == [4]
+        '''
+    }
+
+    @Test
     void arithmeticOnADynamicRowUsesTheRuntimeOperators() {
         assertScript '''
             import groovy.transform.CompileStatic
